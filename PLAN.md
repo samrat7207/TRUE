@@ -327,3 +327,14 @@ Convergence and pivot arrive at times we do not control; they will eat into M5â€
 - Verifier screen: instance status panel and Kill / Restart instance 1 button.
 
 **Convergence upgrade done.** Instance count configurable (`VERIFIER_INSTANCES`, default 3: ports 4002/4012/4022). Front door does round-robin among alive instances with `X-Served-By`, retries on another instance, and returns a friendly 503 when none are alive. Sync fans out to all peers; restart pulls from any live peer. Verifier screen has a card per instance with its own Kill/Restart, plus Kill all / Restart all, a "Served by" badge and a "No server available" state.
+
+**M2 done (revocation + chain registry).** TrustRegistry contract on the local chain replaces `data/registry.json`. Credentials carry a key id and revocation index. Verifier refreshes the revocation list on a timer, checks it against the chain hash, shares it by OR-merge. Issuer console: revoke with reason code, counts, rotate key, mark compromised.
+Defaults chosen: plain hex bit list anchored by hash (not the IETF token format, so the OR-merge stays simple); refresh every 5 s for the demo; credential claim is named `revocation` so the SD-JWT library does not try to fetch a status list itself during verification; chain accounts are the node's unlocked test accounts (0 = registry owner, 1 = issuer admin); credentials issued before M2 no longer verify (re-issue them).
+
+**M3 done (verifier authentication).** Signed requests, wallet checks against the on-chain verifier registry, red block for unregistered or tampered, over-asking flagged and blocked. Default chosen: over-asking blocks Approve rather than only warning.
+
+**Rate limiting done.** In the front door, configurable in `.env`. Front door logic moved to `frontdoor.ts` so it can be tested without processes.
+
+**Load test done.** Button on the verifier page, separate bucket, per-instance counters, cleanup with one audit summary line.
+
+**Still not built:** PIN / WebAuthn step-up, hash-chained audit log with chain anchor, wallet PWA install, camera QR scanning, issuer admin login, hand-written OpenAPI file, partner API key.

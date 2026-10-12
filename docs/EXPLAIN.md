@@ -150,3 +150,71 @@ Kill instance 1 mid-request then approve through instance 2 = verified; cross-in
 - A restarted instance pulls the full state once from the first live peer; if no peer is alive it carries on from its own database file. "Last synced" is set at that pull, so it is correct after a restart.
 - Because disclosed claims are never copied between instances, only the instance that did the check holds them. The verifier page keeps polling a few more times after "verified" until the round-robin reaches that instance, and never replaces an answer that has claims with one that does not.
 - Tests added: create on 1, kill 1 and 2, approve through 3 = verified; kill all then restart one = it still has its requests from its own database file.
+
+
+---
+
+## M2: revocation and the chain registry
+
+### What is on the chain (`contracts/contracts/TrustRegistry.sol`, 87 lines)
+| On-chain item | Why it is there |
+|---|---|
+| Issuer public keys with a state: Active, Retired, Compromised | A verifier can check a signature, and learn a key leaked, without calling the issuer |
+| Verifier registry: name, allowed claims, public key | A wallet can tell a real verifier from a fake one |
+| Fingerprint (hash) and version of each issuer's revocation list | A verifier can tell the list it downloaded is the genuine, current one |
+
+Nothing else. No names, no PNRs, no credentials, not even the revocation list itself: only its hash.
+Only the registry owner can add issuers and verifiers. Only an issuer's own admin account can change that issuer's keys or fingerprint.
+
+### How revocation works now
+1. Every credential carries a position number in the issuer's revocation list (`revocation.idx`). A position number is not personal data.
+2. Issuer clicks **Revoke** and picks a reason code. The student's bit flips to 1, the list version goes up, and the new fingerprint is written to the chain.
+3. Each verifier instance downloads the whole public list every few seconds (`STATUS_REFRESH_SECONDS`, default 5). It accepts the list **only if its SHA-256 equals the fingerprint on the chain**, then ORs the bits into its own copy and shares them with the other instances.
+4. During a verification the verifier reads only its cached copy. If the bit is 1 the answer is **Revoked**.
+
+So the issuer never learns which student is being checked (everyone downloads the same whole file, on a timer), and a fake or stale list is ignored.
+Honest limit: there is a delay of up to one refresh interval between Revoke and verifiers refusing.
+Honest limit: our list is a plain hex bit list with a chain anchor, the same idea as the IETF Token Status List but not that exact format.
+
+### Issuer keys
+- **Rotate key:** new key becomes Active, the old one Retired. Old credentials keep working.
+- **Mark compromised:** the key leaked. Verifiers read the key state from the chain on every check and reject everything it signed (`issuer_key_compromised`). Students must be re-issued under the new key. On the chain a compromised key can never be restored, and a key id can never be reused.
+
+### Because the local chain is wiped on every restart
+`npm run dev` compiles the contract, starts the chain, and runs `scripts/chain-setup.ts`, which deploys and seeds only what is missing. The issuer then re-publishes its keys and current fingerprint from its own database. `npm run reset` wipes all demo state.
+
+## M3: verifier authentication
+
+1. The verifier signs each request with its own private key (`signRequest`).
+2. The wallet reads who the request claims to be from, looks that id up **in the chain registry**, and checks the signature with the registered public key (`authenticateRequest`). The name on screen comes from the registry, never from the request.
+3. Three outcomes:
+   - **Verified** (green): show the consent screen.
+   - **Unregistered** (red): nobody registered that id. Approve does not exist; nothing is sent.
+   - **Tampered** (red): the id is registered but the signature does not match its key.
+4. **Purpose rule:** each verifier is registered for specific claims. If a correctly signed request asks for more, the wallet lists the extra claims in an amber warning and blocks Approve.
+
+Demo: "Free Prize Booth" is a verifier with a key that was deliberately not registered. The "over-ask" switch on the verifier page makes the next request also ask for the home address.
+Honest limit: the wallet reaches the chain through its own dev server (`/chain`), which is fine on one laptop; a real wallet would use a public RPC node.
+
+## Rate limiting (front door)
+
+| Limit | Rule | Answer when hit |
+|---|---|---|
+| Failed verification attempts | 5 failures in 60 s from the same source (IP address + verifier) blocks that source for 60 s | HTTP 429, `Retry-After` header, "Too many attempts, try again in N seconds" |
+| Request creation | 120 per minute per API key or IP address | HTTP 429 `too_many_requests` |
+
+- A failure is an error reply or a denied presentation. Pressing Decline is not a failure.
+- The limiters are two small Maps in `ratelimit.ts`; the clock is passed in so tests can jump forward in time.
+- Blocks show on the verifier page (count and last five) and go into the audit log as `source.blocked` with a salted hash of the source. No IP address is stored or shown.
+- Numbers come from `.env` (`RATE_FAIL_MAX`, `RATE_FAIL_WINDOW_SECONDS`, `RATE_BLOCK_SECONDS`, `RATE_CREATE_MAX_PER_MINUTE`).
+- Honest limits: counters live in the front door's memory, so they reset when it restarts. On one laptop every browser has the same IP address, so all local users share a bucket.
+
+## Load test
+
+- The button creates 50 requests as the synthetic verifier `verifier:load-test` and polls each once (100 calls), five at a time, through the front door.
+- It shows a bar per instance (from the `X-Served-By` header), average and slowest time, and failures, updating as it runs.
+- It has its own limit bucket (1000 per minute), so it is neither blocked by the normal creation limit nor uses it up.
+- Synthetic requests are shared between instances (so any instance can answer a poll) but never written to the audit log. At the end they are deleted on every instance and one summary line is logged: "load-test: 50 requests, 0 failures".
+- Each instance card shows calls served, failures (errors on our side) and uptime.
+- If an instance dies mid-test, the front door retries on another alive instance, so calls still succeed.
+- Honest limit: this measures a laptop talking to itself. The numbers show that load is shared and survives a failure; they say nothing about real-world capacity.
