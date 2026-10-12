@@ -1,6 +1,6 @@
 // Talking to the issuer API as a signed-in staff member.
 // The server checks the session and the role on every call; hiding a button here is only for tidiness.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { URLS } from '@true/shared';
 import { go } from '../ui.tsx';
 
@@ -10,7 +10,21 @@ export type StaffSession = { token: string; staff: { id: string; name: string; r
 // The server also ends it after 30 minutes.
 const KEY = 'true-issuer-session';
 export const getSession = (): StaffSession | null => JSON.parse(sessionStorage.getItem(KEY) ?? 'null');
-export const setSession = (session: StaffSession | null) => (session ? sessionStorage.setItem(KEY, JSON.stringify(session)) : sessionStorage.removeItem(KEY));
+
+// Screens that call useSession() are re-drawn whenever someone signs in or out, or the server ends the session.
+const listeners = new Set<() => void>();
+export function setSession(session: StaffSession | null) {
+  if (session) sessionStorage.setItem(KEY, JSON.stringify(session));
+  else sessionStorage.removeItem(KEY);
+  listeners.forEach((notify) => notify());
+}
+export function useSession(): StaffSession | null {
+  const raw = useSyncExternalStore(
+    (notify) => { listeners.add(notify); return () => listeners.delete(notify); },
+    () => sessionStorage.getItem(KEY),
+  );
+  return raw ? JSON.parse(raw) : null;
+}
 
 // May the signed-in staff member do this? Used to hide or disable buttons. The server decides for real.
 export const can = (permission: 'issue' | 'revoke' | 'keys' | 'staff') => getSession()?.staff.permissions.includes(permission) ?? false;
@@ -61,7 +75,7 @@ export function useApi<T = any>(path: string | null) { // eslint-disable-line @t
 
 export type Student = { id: number; name: string; pnr: string; class: string; section: string; branch: string; status: string };
 export type Credential = {
-  id: string; student_id: number; type: string; display_status: 'pending' | 'active' | 'revoked' | 'replaced' | 'expired';
+  id: string; student_id: number; type: string; display_status: 'pending' | 'active' | 'revoked' | 'replaced' | 'expired' | 'declined' | 'cancelled';
   claim_code: string; valid_from: string; valid_till: string; issued_by: string | null; created_at: string; claimed_at: string | null;
   status_list_index: number | null; revoked_reason: string | null; revoked_at: string | null; revoked_by: string | null;
   student_name: string; student_pnr: string; student_branch: string; student_status: string;
@@ -70,8 +84,8 @@ export type AuditEvent = { id: number; ts: string; type: string; staff_id: strin
 
 // ---------- words ----------
 
-export const STATUS_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'neutral'> = { active: 'ok', pending: 'warn', revoked: 'bad', replaced: 'neutral', expired: 'neutral' };
-export const STATUS_LABEL: Record<string, string> = { active: 'Active', pending: 'Pending', revoked: 'Revoked', replaced: 'Replaced', expired: 'Offer expired' };
+export const STATUS_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'neutral'> = { active: 'ok', pending: 'warn', revoked: 'bad', replaced: 'neutral', expired: 'neutral', declined: 'neutral', cancelled: 'neutral' };
+export const STATUS_LABEL: Record<string, string> = { active: 'Active', pending: 'Pending', revoked: 'Revoked', replaced: 'Replaced', expired: 'Offer expired', declined: 'Declined by holder', cancelled: 'Offer cancelled' };
 
 export const REVOKE_REASONS: Record<string, string> = { lost: 'Lost / Stolen', no_longer_valid: 'No longer valid', violation: 'Violation of terms', duplicate: 'Duplicate issued', other: 'Other' };
 
@@ -88,6 +102,10 @@ export const EVENT_LABEL: Record<string, { label: string; tone: 'ok' | 'warn' | 
   'staff.deactivated': { label: 'Staff deactivated', tone: 'neutral' },
   'staff.login': { label: 'Signed in', tone: 'neutral' },
   'staff.login_failed': { label: 'Wrong PIN', tone: 'bad' },
+  'offer.declined': { label: 'Declined by holder', tone: 'neutral' },
+  'offer.cancelled': { label: 'Offer cancelled', tone: 'neutral' },
+  'inbox.linked': { label: 'Holder linked record', tone: 'neutral' },
+  'inbox.link_failed': { label: 'Failed link attempt', tone: 'bad' },
   'request.received': { label: 'Request received', tone: 'warn' },
   'request.approved': { label: 'Request approved', tone: 'ok' },
   'request.rejected': { label: 'Request rejected', tone: 'bad' },

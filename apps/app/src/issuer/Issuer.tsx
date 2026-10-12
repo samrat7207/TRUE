@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { CREDENTIAL_TYPES, URLS } from '@true/shared';
 import { Avatar, Badge, BottomTabs, Card, ISSUER_TABS, PillButton, Screen, TopBar, go } from '../ui.tsx';
 import {
-  EVENT_LABEL, ago, api, getSession, setSession, signOut, useApi, type AuditEvent, type Credential,
+  EVENT_LABEL, ago, api, getSession, setSession, signOut, useApi, useSession, type AuditEvent, type Credential,
 } from './api.ts';
 import { Search, IssueNew, CredentialDetail, Registry } from './IssuerWork.tsx';
 import { ActivityLog, Keys, Reports, Staff } from './IssuerAdmin.tsx';
@@ -12,8 +12,9 @@ import { PendingRequests } from './IssuerRequests.tsx';
 export const IssuerTabs = ({ active }: { active: string }) => <BottomTabs tabs={ISSUER_TABS} active={active} />;
 
 export function IssuerApp({ path, params }: { path: string; params: URLSearchParams }) {
-  // No session: every issuer address shows the PIN screen.
-  if (!getSession()) return <PinScreen />;
+  // No session (never signed in, signed out, or ended by the server): every issuer address shows the PIN screen.
+  const session = useSession();
+  if (!session) return <PinScreen />;
   switch (path) {
     case '/issuer/search': return <Search />;
     case '/issuer/issue': return <IssueNew studentId={Number(params.get('student'))} />;

@@ -308,3 +308,29 @@ What staff and logs never see: the holder's secret request id. The audit log rec
 
 **Demo limit (shown on both screens):** this is not identity proofing. Anyone who knows a student's PNR and date of birth could send the form and, once approved, collect that student's credential on their own phone. A real issuer would verify the person (in person or through an official identity service) before approving.
 Other limits: the app only polls while it is open in holder mode; the public form is capped at 30 requests a minute in total, not per sender.
+
+
+## Offers inbox: how an issued credential reaches the holder's app
+
+**The gap this closes:** when staff issued a credential, the offer existed only as a QR code, a link and a claim code. Nothing told the holder's app, so the registry said Pending while the holder saw nothing. (Claiming by link or code always worked; the Requests tab only listed requests the holder had sent.)
+
+1. **Link my institute record** (Requests tab): the holder types PNR and date of birth once. The issuer API checks both and returns a random **inbox token**, valid 24 hours and tied to that one student. The server keeps only a hash of the token; the app keeps the token. The typed date of birth is stored nowhere.
+2. **Offers for you:** every 3 seconds while the tab is open, the app asks for that student's open offers with the token and shows each as "<type> from <institute> · Pending" with Accept and Decline.
+3. **Accept** asks the server for the offer's claim code (refreshed for a few minutes), then runs the normal claim flow: the holder key is made on the device and proves itself as before. The card lands in the wallet and the registry row goes Pending → Active.
+4. **Decline** marks the offer "Declined by holder"; staff see it in the registry.
+5. **Cancel offer** (credential detail, issuer role or admin, checked on the server, logged with the staff id) withdraws an offer that was not collected. Its QR, link and code stop working.
+
+### Safeguards
+- **One generic error.** Wrong PNR, wrong date and malformed input all return exactly "Those details do not match our records", so the form cannot be used to test PNRs or dates.
+- **Rate limit.** 5 failed link attempts in a minute from one source (IP address) lock that source out for a minute (HTTP 429 with Retry-After).
+- **Failures are logged** as `inbox.link_failed` with a hash of the source only: no PNR, no date.
+- **A token is for one student.** Listing, accepting and declining all look the offer up by "this id AND this token's student"; another student's offer simply does not exist for it.
+- **Two lifetimes.** The QR / claim code is a bearer code, so it stays short (10 minutes). The offer itself now stays open for 24 hours for a linked holder. The registry shows "Offer expired" after the 24 hours, not after the 10 minutes.
+
+### Honest limits
+- PNR plus date of birth is weak proof of identity. Anyone who knows both could link as that student and accept their offers. A real institute would use a proper sign-in.
+- The rate limit is per IP address; on one laptop every browser shares it.
+- Offers only arrive while the app is open on the Requests tab (polling, no push notifications).
+
+### Bug fixed alongside
+When the issuer API ended a staff session (for example after a restart), the issuer console showed a blank page. Screens now subscribe to the session and switch to the PIN screen at once.

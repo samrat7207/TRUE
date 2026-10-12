@@ -351,3 +351,7 @@ Defaults chosen: admin can do everything (so one sign-in runs the old console to
 Defaults chosen: the server refuses approval unless PNR and date of birth both match; the typed date is not stored; the holder is not told whether details matched; approved claim codes last 24 hours.
 Not real identity proofing: documented on both screens and in docs/EXPLAIN.md.
 Next: verifier screens in the new app, then retire the three old apps.
+
+**Stage 2 fix: offers inbox.** Reproduced with two origins: claiming by link/code worked, but an issued offer never reached the holder's app. Added "Link my institute record" (PNR + date of birth → 24-hour inbox token), an "Offers for you" list with Accept / Decline, and "Cancel offer" for staff. Also fixed the issuer console going blank when a session ended.
+Defaults chosen: an offer stays open 24 hours (the QR / claim code stays 10 minutes); the registry's "Offer expired" now follows the 24 hours; link failures return one generic message and are limited to 5 a minute per source.
+Phase 3 (verifier screens) not started.

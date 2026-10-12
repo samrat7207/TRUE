@@ -2,6 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import { ISSUER_ID } from '@true/shared';
 import { generateSigningKeyPair } from '@true/credentials';
 import type { StaffRole } from './db.ts';
@@ -50,7 +51,10 @@ const seedStaff = DEMO_STAFF.map((person) => {
 });
 
 // A first key is only used if the database has none yet.
-const app = createIssuerApp(db, await generateSigningKeyPair(), chain, { seedStaff });
+const app = createIssuerApp(db, await generateSigningKeyPair(), chain, {
+  seedStaff,
+  getSource: (c) => getConnInfo(c).remote.address ?? 'unknown', // the caller's IP address, for rate limiting
+});
 
 // The local chain starts empty on every run, but our database persists. So on start-up we publish
 // whatever the chain is missing: every public key with its state, and the revocation list fingerprint.

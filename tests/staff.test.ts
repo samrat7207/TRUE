@@ -221,13 +221,16 @@ describe('issue, registry and revoke from the new console', () => {
   });
 
   it('registry filters, search and an expired offer', async () => {
-    const token = await signIn('issuer');
+    let token = await signIn('issuer');
     const first = await (await issuer.request('/v1/issue', json(issueBody(1), token))).json();
     await claim(first.code);
     await issuer.request('/v1/issue', json(issueBody(3), token));
     const list = async (status: string) => (await (await issuer.request(`/v1/registry?status=${status}`, auth(token))).json()).credentials.length;
     expect([await list('active'), await list('pending'), await list('revoked')]).toEqual([1, 1, 0]);
-    time += 11 * 60_000; // the claim code for the second offer runs out
+    time += 11 * 60_000; // the QR / claim code runs out, but the offer itself stays open for a day
+    expect([await list('pending'), await list('expired')]).toEqual([1, 0]);
+    time += 24 * 3_600_000;
+    token = await signIn('issuer'); // the 30-minute session ended long ago
     expect([await list('pending'), await list('expired')]).toEqual([0, 1]);
 
     const search = async (q: string) => (await (await issuer.request(`/v1/students?q=${encodeURIComponent(q)}`, auth(await signIn('auditor')))).json()).students.map((s: { name: string }) => s.name);

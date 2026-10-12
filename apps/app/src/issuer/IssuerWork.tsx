@@ -233,7 +233,20 @@ export function CredentialDetail({ id }: { id: string }) {
       {status === 'active' && (can('revoke')
         ? <PillButton kind="danger" onClick={() => { setError(''); setStep('reason'); }}>Revoke credential</PillButton>
         : <p className="text-center text-small text-muted">Your role cannot revoke credentials.</p>)}
-      {status === 'pending' && <p className="text-center text-small text-muted">Waiting for the holder to collect it with claim code <span className="font-mono">{credential.claim_code}</span>.</p>}
+      {status === 'pending' && (
+        <>
+          <p className="mb-4 text-center text-small text-muted">
+            Waiting for the holder. They can accept it in their app (Requests tab, after linking their record), or use claim code{' '}
+            <span className="font-mono">{credential.claim_code}</span> while it is fresh.
+          </p>
+          {error && <Card tone="bad" className="mb-3"><span className="text-small text-bad">{error}</span></Card>}
+          {can('issue')
+            ? <PillButton kind="danger" onClick={async () => { if (await attempt(() => api(`/v1/registry/${id}/cancel`, {}), setError)) reload(); }}>Cancel offer</PillButton>
+            : <p className="text-center text-small text-muted">Only the issuer role or an admin can cancel an offer.</p>}
+        </>
+      )}
+      {status === 'declined' && <p className="text-center text-small text-muted">The holder declined this offer. Nothing was issued.</p>}
+      {status === 'cancelled' && <p className="text-center text-small text-muted">Staff cancelled this offer before it was collected. Its code no longer works.</p>}
     </Screen>
   );
 }

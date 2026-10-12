@@ -31,13 +31,14 @@ export type StaffRole = 'admin' | 'issuer' | 'revoker' | 'auditor';
 export type StaffRow = { id: string; name: string; role: StaffRole; pin_hash: string; active: number; created_at: string };
 
 // One row per credential the issuer has offered. This is the issuer's registry.
-// status: pending = claim code created, not collected yet; active = collected; revoked = cancelled;
-// replaced = the same student collected a newer one of the same type.
+// status: pending = offered, not collected yet; active = collected; revoked = cancelled after collection;
+// replaced = the same student collected a newer one of the same type;
+// declined = the holder said no to the offer; cancelled = staff withdrew the offer before it was collected.
 export type CredentialRow = {
   id: string; // e.g. TR-SID-0007
   student_id: number;
   type: string; // StudentCredential | LibraryCard
-  status: 'pending' | 'active' | 'revoked' | 'replaced';
+  status: 'pending' | 'active' | 'revoked' | 'replaced' | 'declined' | 'cancelled';
   claim_code: string;
   valid_from: string;
   valid_till: string;
@@ -154,6 +155,13 @@ CREATE TABLE IF NOT EXISTS credential_requests (
   created_at TEXT NOT NULL,
   decided_at TEXT,
   decided_by TEXT
+);
+-- Offers inbox: proof that a phone belongs to a student whose PNR and date of birth were checked.
+-- Only a hash of the token is stored. A token works for ONE student and for 24 hours.
+CREATE TABLE IF NOT EXISTS inbox_tokens (
+  token_hash TEXT PRIMARY KEY,
+  student_id INTEGER NOT NULL REFERENCES students(id),
+  expires_at TEXT NOT NULL
 );
 -- List positions that belonged to a revoked credential. They are never handed out again,
 -- because a revoked bit can never be turned back to 0.

@@ -1,7 +1,7 @@
 // Issuer API routes. The issuer database decides who may receive a credential.
 // Every staff action needs a signed-in staff member with the right role; this is checked HERE on the
 // server for each route, not only hidden in the user interface.
-import { Hono, type MiddlewareHandler } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
@@ -17,6 +17,9 @@ import { hashPin, pinMatches } from './pin.ts';
 const CLAIM_CODE_MINUTES = 10;
 // An approved request's code lasts a day: the holder's app collects it by itself the next time it is open.
 const APPROVED_REQUEST_CODE_MINUTES = 24 * 60;
+// An offer waits this long for the holder. (The QR / claim code itself stays short-lived: it is a bearer code.)
+const OFFER_HOURS = 24;
+const INBOX_TOKEN_HOURS = 24;
 const DEFAULT_VALID_DAYS = 365;
 const SESSION_MINUTES = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -51,6 +54,8 @@ export type IssuerOptions = {
   // Staff created on a brand-new database (the demo's four fake staff; PINs come from .env).
   seedStaff?: { id: string; name: string; role: StaffRole; pin: string }[];
   now?: () => number; // clock in milliseconds; tests move it
+  // Who is calling a public endpoint (the IP address), for rate limiting. server.ts supplies the real one.
+  getSource?: (c: Context) => string;
 };
 
 type SignedInStaff = { id: string; name: string; role: StaffRole };
@@ -421,6 +426,95 @@ export function createIssuerApp(db: DatabaseSync, firstKey: IssuerKeys, chain?: 
   });
 
   // ====================================================================================
+  // Offers inbox: how an offer reaches the holder's app without a QR code
+  // ====================================================================================
+  // The holder "links" their record once by giving PNR + date of birth. They get a random inbox token.
+  // With it the app can list, accept or decline offers FOR THAT STUDENT ONLY.
+  // DEMO LIMIT: PNR + date of birth is weak proof. A real issuer would use a proper sign-in.
+
+  const linkLimiter = createFailureLimiter({ max: 5, windowSeconds: 60, blockSeconds: 60, now });
+  const sourceOf = (c: Context) => options.getSource?.(c) ?? 'unknown';
+
+  app.post('/v1/inbox/link', async (c) => {
+    const source = sourceOf(c);
+    const wait = linkLimiter.retryAfter(source);
+    if (wait > 0) {
+      c.header('Retry-After', String(wait));
+      return c.json(refuse('too_many_attempts', `Too many attempts, try again in ${wait} seconds`), 429);
+    }
+    const body = z.object({ pnr: z.string().trim().min(1).max(20), dob: z.string().max(10) }).safeParse(await c.req.json().catch(() => null));
+    const student = body.success
+      ? (db.prepare('SELECT * FROM students WHERE pnr = ?').get(body.data.pnr.toUpperCase()) as Student | undefined)
+      : undefined;
+    if (!body.success || !student || student.dob !== body.data.dob) {
+      linkLimiter.recordFailure(source);
+      // Logged with a hash of the caller's address only: no PNR, no date.
+      audit('inbox.link_failed', null, `source:${sha256Hex(source).slice(0, 16)}`);
+      // One message for every kind of failure, so it cannot be used to test PNRs or dates.
+      return c.json(refuse('link_failed', 'Those details do not match our records'), 401);
+    }
+    const token = randomToken() + randomToken();
+    const expiresAt = new Date(now() + INBOX_TOKEN_HOURS * 3_600_000).toISOString();
+    db.prepare('INSERT INTO inbox_tokens (token_hash, student_id, expires_at) VALUES (?, ?, ?)').run(sha256Hex(token), student.id, expiresAt);
+    audit('inbox.linked', null, `student:${student.id}`);
+    return c.json({ token, expiresAt, issuerName: ISSUER_NAME });
+  });
+
+  // Which student does this inbox token belong to? Null if it is unknown or expired.
+  function inboxStudent(c: Context): number | null {
+    const token = (c.req.header('authorization') ?? '').replace(/^Bearer /, '');
+    const row = db.prepare('SELECT * FROM inbox_tokens WHERE token_hash = ?').get(sha256Hex(token)) as { student_id: number; expires_at: string } | undefined;
+    return row && new Date(row.expires_at).getTime() > now() ? row.student_id : null;
+  }
+  const inboxRefused = refuse('inbox_token_invalid', 'Link your institute record again');
+
+  // The open offer with this id, but only if it belongs to the token's student.
+  function ownOffer(studentId: number, id: string): CredentialRow | undefined {
+    const row = db.prepare("SELECT * FROM credentials WHERE id = ? AND student_id = ? AND status = 'pending'").get(id, studentId) as CredentialRow | undefined;
+    return row && offerOpen(row) ? row : undefined;
+  }
+
+  // Holder: offers waiting for me.
+  app.get('/v1/inbox/offers', (c) => {
+    const studentId = inboxStudent(c);
+    if (studentId === null) return c.json(inboxRefused, 401);
+    const rows = (db.prepare("SELECT * FROM credentials WHERE student_id = ? AND status = 'pending' ORDER BY created_at DESC").all(studentId) as CredentialRow[]).filter(offerOpen);
+    return c.json({ issuerName: ISSUER_NAME, offers: rows.map((row) => ({ id: row.id, type: row.type, createdAt: row.created_at })) });
+  });
+
+  // Holder: accept. Returns a claim code that is good for the next few minutes; the app then runs the
+  // normal claim flow with it (the holder key is made on the device and proves itself as usual).
+  app.post('/v1/inbox/offers/:id/accept', (c) => {
+    const studentId = inboxStudent(c);
+    if (studentId === null) return c.json(inboxRefused, 401);
+    const row = ownOffer(studentId, c.req.param('id'));
+    if (!row) return c.json(refuse('unknown_offer', 'No such open offer'), 404);
+    db.prepare('UPDATE claim_codes SET expires_at = ? WHERE code = ? AND used_at IS NULL').run(new Date(now() + CLAIM_CODE_MINUTES * 60_000).toISOString(), row.claim_code);
+    return c.json({ code: row.claim_code });
+  });
+
+  // Holder: decline. The issuer sees it in the registry.
+  app.post('/v1/inbox/offers/:id/decline', (c) => {
+    const studentId = inboxStudent(c);
+    if (studentId === null) return c.json(inboxRefused, 401);
+    const row = ownOffer(studentId, c.req.param('id'));
+    if (!row) return c.json(refuse('unknown_offer', 'No such open offer'), 404);
+    db.prepare("UPDATE credentials SET status = 'declined' WHERE id = ?").run(row.id);
+    audit('offer.declined', null, row.id);
+    return c.json({ ok: true });
+  });
+
+  // Staff (issuer role or admin): withdraw an offer that has not been collected. Its QR, link and code stop working.
+  app.post('/v1/registry/:id/cancel', staff('issue'), (c) => {
+    const row = db.prepare('SELECT * FROM credentials WHERE id = ?').get(c.req.param('id')) as CredentialRow | undefined;
+    if (!row) return c.json(refuse('unknown_credential', 'No such credential'), 404);
+    if (row.status !== 'pending') return c.json(refuse('not_pending', 'Only an offer that has not been collected can be cancelled'), 409);
+    db.prepare("UPDATE credentials SET status = 'cancelled' WHERE id = ?").run(row.id);
+    audit('offer.cancelled', c.get('staff').id, row.id);
+    return c.json({ ok: true });
+  });
+
+  // ====================================================================================
   // Requests from holders ("please issue me an ID")
   // ====================================================================================
   // DEMO LIMIT: knowing a PNR and a date of birth is NOT identity proofing. A real issuer would check
@@ -506,10 +600,12 @@ export function createIssuerApp(db: DatabaseSync, firstKey: IssuerKeys, chain?: 
       k.expires_at AS code_expires_at
     FROM credentials c JOIN students s ON s.id = c.student_id JOIN claim_codes k ON k.code = c.claim_code`;
   type RegistryRow = CredentialRow & { student_name: string; student_pnr: string; student_branch: string; student_status: string; code_expires_at: string };
-  // A pending offer whose claim code has run out is shown as "expired": it can no longer be collected.
+  // An offer nobody collected within its window is shown as "expired". (The QR / claim code runs out much
+  // sooner, but a holder who linked their record can still accept the offer from their inbox.)
+  const offerOpen = (row: { created_at: string }) => new Date(row.created_at).getTime() + OFFER_HOURS * 3_600_000 > now();
   const withDisplayStatus = (row: RegistryRow) => ({
     ...row,
-    display_status: row.status === 'pending' && new Date(row.code_expires_at).getTime() < now() ? 'expired' : row.status,
+    display_status: row.status === 'pending' && !offerOpen(row) ? 'expired' : row.status,
   });
 
   app.get('/v1/registry', staff(), (c) => {

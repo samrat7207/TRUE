@@ -13,6 +13,10 @@ export type Settings = { holderName: string; issuerApi: string };
 // The date of birth typed on the form is sent once and NOT kept here.
 export type MyRequest = { id: string; type: string; pnr: string; createdAt: string; status: 'pending' | 'approved' | 'rejected'; note?: string };
 
+// The link to the holder's institute record: a random token from the issuer, good for 24 hours.
+// The date of birth typed to get it is sent once and never kept.
+export type InboxLink = { token: string; expiresAt: string; pnr: string; issuerName: string };
+
 // Tests run in Node, which has no IndexedDB: they switch the store to a plain in-memory Map.
 let memory: Map<string, unknown> | null = null;
 export function useMemoryStorage(): void {
@@ -99,6 +103,9 @@ export async function addHistory(entry: HistoryEntry): Promise<void> {
 export const getMyRequests = async () => (await get<MyRequest[]>('requests')) ?? [];
 export const saveMyRequests = (requests: MyRequest[]) => set('requests', requests);
 
+export const getInboxLink = () => get<InboxLink>('inbox');
+export const saveInboxLink = (link: InboxLink | undefined) => set('inbox', link);
+
 export const getSettings = async () => (await get<Partial<Settings>>('settings')) ?? {};
 
 export async function saveSettings(settings: Partial<Settings>): Promise<void> {
@@ -108,5 +115,5 @@ export async function saveSettings(settings: Partial<Settings>): Promise<void> {
 // "Reset wallet": forget the key, every card, the history and the settings.
 // The key cannot be recovered afterwards; credentials must be issued again.
 export async function resetWallet(): Promise<void> {
-  for (const key of ['holderKey', 'credentials', 'history', 'settings', 'requests']) await set(key, undefined);
+  for (const key of ['holderKey', 'credentials', 'history', 'settings', 'requests', 'inbox']) await set(key, undefined);
 }

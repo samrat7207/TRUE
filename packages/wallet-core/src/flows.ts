@@ -6,8 +6,8 @@ import {
   type RequestCheck, type VerifierInfo,
 } from '@true/credentials';
 import {
-  addCredential, addHistory, getCredentials, getHolderKey, getMyRequests, markRevoked, removeCredential, saveMyRequests,
-  type MyRequest, type StoredCredential,
+  addCredential, addHistory, getCredentials, getHolderKey, getInboxLink, getMyRequests, markRevoked, removeCredential,
+  saveInboxLink, saveMyRequests, type InboxLink, type MyRequest, type StoredCredential,
 } from './storage.ts';
 
 // How the wallet reaches servers. The browser passes window.fetch; tests pass a stand-in.
@@ -178,4 +178,51 @@ export async function refreshCredentialRequests(input: { issuerApi: string; fetc
   }
   if (changed) await saveMyRequests(requests);
   return requests;
+}
+
+// ---------- offers inbox: offers the issuer made to this holder ----------
+
+export type InboxOffer = { id: string; type: string; createdAt: string };
+const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+// "Link my institute record": the issuer checks PNR + date of birth and gives back an inbox token.
+// The date of birth is sent once and not stored on the device.
+export async function linkInstituteRecord(input: { pnr: string; dob: string; issuerApi: string; fetch: Fetch }): Promise<InboxLink> {
+  const response = await input.fetch(`${input.issuerApi}/v1/inbox/link`, postJson({ pnr: input.pnr, dob: input.dob }));
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error.message);
+  const link: InboxLink = { token: body.token, expiresAt: body.expiresAt, pnr: input.pnr.trim().toUpperCase(), issuerName: body.issuerName };
+  await saveInboxLink(link);
+  return link;
+}
+
+// Offers waiting for this holder. If the token is no longer accepted, the link is forgotten and
+// `link` comes back undefined, so the screen asks to link again.
+export async function getInboxOffers(input: { issuerApi: string; fetch: Fetch }): Promise<{ link: InboxLink | undefined; offers: InboxOffer[] }> {
+  const link = await getInboxLink();
+  if (!link) return { link: undefined, offers: [] };
+  const response = await input.fetch(`${input.issuerApi}/v1/inbox/offers`, { headers: bearer(link.token) }).catch(() => null);
+  if (!response) return { link, offers: [] }; // issuer not reachable right now
+  if (response.status === 401) {
+    await saveInboxLink(undefined);
+    return { link: undefined, offers: [] };
+  }
+  return { link, offers: (await response.json()).offers };
+}
+
+// Accept: ask the issuer for the offer's claim code, then run the normal claim flow with it.
+export async function acceptInboxOffer(input: { offerId: string; issuerApi: string; fetch: Fetch }): Promise<StoredCredential> {
+  const link = await getInboxLink();
+  if (!link) throw new Error('Link your institute record first');
+  const response = await input.fetch(`${input.issuerApi}/v1/inbox/offers/${input.offerId}/accept`, { method: 'POST', headers: bearer(link.token) });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error.message);
+  return claimCredential({ code: body.code, issuerApi: input.issuerApi, fetch: input.fetch });
+}
+
+export async function declineInboxOffer(input: { offerId: string; issuerApi: string; fetch: Fetch }): Promise<void> {
+  const link = await getInboxLink();
+  if (!link) throw new Error('Link your institute record first');
+  const response = await input.fetch(`${input.issuerApi}/v1/inbox/offers/${input.offerId}/decline`, { method: 'POST', headers: bearer(link.token) });
+  if (!response.ok) throw new Error((await response.json()).error.message);
 }
