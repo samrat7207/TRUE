@@ -60,13 +60,13 @@ CREATE TABLE IF NOT EXISTS audit_events (
 // in real life each would run its own copy of this service.
 // registered: true means scripts/chain-setup.ts puts this verifier in the on-chain registry.
 export const DEMO_VERIFIERS = [
-  { id: 'verifier:city-library', name: 'City Library', purpose: 'Issue a library membership card', claims: ['name', 'photo', 'pnr'], registered: true },
-  { id: 'verifier:nova-arena', name: 'Nova Arena', purpose: 'Entry to an 18+ event', claims: ['age_over_18'], registered: true },
-  { id: 'verifier:campus-store', name: 'Campus Store', purpose: 'Student discount', claims: ['is_student'], registered: true },
+  { id: 'verifier:city-library', name: 'City Library', purpose: 'Issue a library membership card', claims: ['name', 'id_number'], registered: true },
+  { id: 'verifier:nova-arena', name: 'Nova Arena', purpose: 'Entry to an 18+ event', claims: ['dob'], registered: true },
+  { id: 'verifier:campus-store', name: 'Campus Store', purpose: 'Student discount', claims: ['name'], registered: true },
   // The phishing demo: a verifier nobody registered. The wallet must warn about it.
   { id: 'verifier:free-prize-booth', name: 'Free Prize Booth', purpose: 'Win a free phone', claims: ['name', 'dob', 'address'], registered: false },
   // Synthetic verifier used only by the load test button. Not registered, never shown as a verifier card.
-  { id: LOAD_TEST_VERIFIER_ID, name: 'Load test (synthetic)', purpose: 'Synthetic load test', claims: ['is_student'], registered: false },
+  { id: LOAD_TEST_VERIFIER_ID, name: 'Load test (synthetic)', purpose: 'Synthetic load test', claims: ['name'], registered: false },
 ];
 
 // Opens (and on first run creates and seeds) the verifier database. Use ':memory:' in tests.

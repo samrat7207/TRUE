@@ -34,19 +34,19 @@ export function TopBar({ title, back, right }: { title?: string; back?: string; 
 export type Tab = { path: string; label: string; icon: string };
 
 export const HOLDER_TABS: Tab[] = [
-  { path: '/home', label: 'Home', icon: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
+  { path: '/home', label: 'Wallet', icon: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
   { path: '/scan', label: 'Scan', icon: 'M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 8h3v3H8zM13 13h3v3h-3z' },
-  { path: '/requests', label: 'Requests', icon: 'M4 5h16v11H9l-5 4zM8 9h8M8 12h5' },
+  { path: '/offers', label: 'Offers', icon: 'M4 5h16v11H9l-5 4zM8 9h8M8 12h5' },
   { path: '/activity', label: 'Activity', icon: 'M12 7v5l3 2M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9z' },
   { path: '/discover', label: 'Discover', icon: 'M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9zM15.5 8.5l-2 5-5 2 2-5z' },
 ];
 
-export const ISSUER_TABS: Tab[] = [
-  { path: '/issuer/home', label: 'Home', icon: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
-  { path: '/issuer/search', label: 'Search', icon: 'M11 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8zM21 21l-4.3-4.3' },
-  { path: '/issuer/registry', label: 'Registry', icon: 'M4 6h16M4 12h16M4 18h10' },
-  { path: '/issuer/reports', label: 'Reports', icon: 'M4 20V10M10 20V4M16 20v-7M22 20H2' },
-  { path: '/issuer/more', label: 'More', icon: 'M5 12h.01M12 12h.01M19 12h.01' },
+export const INSTITUTION_TABS: Tab[] = [
+  { path: '/inst/home', label: 'Dashboard', icon: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
+  { path: '/inst/issue', label: 'Issue ID', icon: 'M12 5v14M5 12h14' },
+  { path: '/inst/issued', label: 'Issued', icon: 'M4 6h16M4 12h16M4 18h10' },
+  { path: '/inst/activity', label: 'Activity', icon: 'M12 7v5l3 2M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9z' },
+  { path: '/inst/account', label: 'Account', icon: 'M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zM4 21a8 8 0 0 1 16 0' },
 ];
 
 // Fixed bar at the bottom with the main places.

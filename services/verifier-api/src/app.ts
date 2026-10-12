@@ -152,7 +152,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     await recordAndShare('request.created', id);
     const requestUri = `${URLS.verifierApi}/v1/requests/${id}/object`;
     // The QR code is a link that opens the wallet and tells it where to fetch the request.
-    const walletUrl = `${URLS.wallet}/#/present?request_uri=${encodeURIComponent(requestUri)}`;
+    const walletUrl = `${URLS.app}/#/consent?request_uri=${encodeURIComponent(requestUri)}`;
     return c.json({ requestId: id, requestUri, walletUrl, expiresAt }, 201);
   });
 

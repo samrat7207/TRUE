@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
-import { ISSUER_ID, STATUS_LIST_URL } from '@true/shared';
+import { STATUS_LIST_ID, STATUS_LIST_URL } from '@true/shared';
 import { sha256Hex } from '@true/credentials';
 import { createRegistryReader, type ChainConfig } from '@true/registry';
 import { openVerifierDb } from './db.ts';
@@ -83,7 +83,7 @@ setInterval(async () => {
   try {
     const outcome = await refreshStatusList(db, {
       fetchList: async () => (await fetch(STATUS_LIST_URL, { signal: AbortSignal.timeout(2000) })).json(),
-      getAnchorHash: async () => (await registry.getStatusAnchor(ISSUER_ID)).hash,
+      getAnchorHash: async () => (await registry.getStatusAnchor(STATUS_LIST_ID)).hash,
       hash: sha256Hex,
     });
     if (outcome === 'updated') {

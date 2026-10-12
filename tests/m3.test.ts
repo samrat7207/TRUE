@@ -33,7 +33,7 @@ describe('verifier authentication', () => {
     expect(check.status).toBe('verified');
     if (check.status !== 'verified') return;
     expect(check.verifierName).toBe('Nova Arena');
-    expect(check.request.claims).toEqual(['age_over_18']);
+    expect(check.request.claims).toEqual(['dob']);
     expect(check.extraClaims).toEqual([]);
   });
 
@@ -47,7 +47,7 @@ describe('verifier authentication', () => {
     // Change the claims inside the signed request to ask for the address as well.
     const [header, payload, signature] = signed.split('.');
     const content = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    content.claims = ['age_over_18', 'address'];
+    content.claims = ['dob', 'address'];
     const forged = [header, Buffer.from(JSON.stringify(content)).toString('base64url'), signature].join('.');
     expect((await authenticateRequest(forged, lookup)).status).toBe('tampered');
   });
@@ -65,7 +65,7 @@ describe('verifier authentication', () => {
   });
 
   it('over-asking is flagged: claims beyond the registration are listed', async () => {
-    const check = await authenticateRequest(await signedRequestFor({ verifierId: 'verifier:nova-arena', claims: ['age_over_18', 'address'] }), lookup);
+    const check = await authenticateRequest(await signedRequestFor({ verifierId: 'verifier:nova-arena', claims: ['dob', 'address'] }), lookup);
     expect(check.status).toBe('verified');
     if (check.status !== 'verified') return;
     expect(check.extraClaims).toEqual(['address']);

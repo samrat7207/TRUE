@@ -1,4 +1,4 @@
-// Scan tab: read a verifier's QR code (or an issuer's offer) with the camera, or paste the link.
+// Scan tab: read a checker's QR code with the camera, or paste the link.
 import { useEffect, useRef, useState } from 'react';
 import { parseScanned } from '@true/wallet-core';
 import { BottomTabs, Card, PillButton, Screen, go } from '../ui.tsx';
@@ -8,12 +8,11 @@ import { BottomTabs, Card, PillButton, Screen, go } from '../ui.tsx';
 type Detector = { detect: (source: HTMLVideoElement) => Promise<{ rawValue: string }[]> };
 const BarcodeDetectorClass = (window as unknown as { BarcodeDetector?: new (options: { formats: string[] }) => Detector }).BarcodeDetector;
 
-// Open the right screen for what was scanned or pasted. Returns false if we do not recognise it.
+// Open the consent screen for what was scanned or pasted. Returns false if it is not a request.
 function open(text: string): boolean {
-  const scanned = parseScanned(text);
-  if (scanned.kind === 'present') go(`/consent?request_uri=${encodeURIComponent(scanned.requestUri)}`);
-  else if (scanned.kind === 'claim') go(`/claim?code=${scanned.code}`);
-  return scanned.kind !== 'unknown';
+  const requestUri = parseScanned(text);
+  if (requestUri) go(`/consent?request_uri=${encodeURIComponent(requestUri)}`);
+  return requestUri !== null;
 }
 
 export function Scan() {
@@ -37,7 +36,7 @@ export function Scan() {
         timer = setInterval(async () => {
           if (!video.current) return;
           const found = await detector.detect(video.current).catch(() => []);
-          if (found[0] && !open(found[0].rawValue)) setError('That QR code is not a TRUE request or offer.');
+          if (found[0] && !open(found[0].rawValue)) setError('That QR code is not a TRUE request.');
         }, 300);
       })
       .catch(() => setCamera('failed')); // no camera, or permission refused
@@ -50,7 +49,7 @@ export function Scan() {
   return (
     <Screen tabs={<BottomTabs active="/scan" />}>
       <h1 className="text-title font-bold leading-tight">Scan</h1>
-      <p className="mt-2 mb-5 text-muted">Scan a verifier's QR code to share a proof, or an issuer's offer to claim a credential.</p>
+      <p className="mt-2 mb-5 text-muted">Scan a checker's QR code to share a proof. You see exactly what is asked before anything is sent.</p>
 
       <Card className="mb-5">
         {camera === 'on' && BarcodeDetectorClass
@@ -71,11 +70,11 @@ export function Scan() {
 
       <h2 className="mb-2 font-semibold">Or paste a link</h2>
       <input
-        value={link} onChange={(e) => { setLink(e.target.value); setError(''); }} placeholder="Verifier link, offer link or claim code"
+        value={link} onChange={(e) => { setLink(e.target.value); setError(''); }} placeholder="Link shown under the checker's QR code"
         className="mb-3 w-full rounded-row border border-line bg-surface px-4 py-3.5 text-small"
       />
       {error && <Card tone="bad" className="mb-3"><span className="text-small text-bad">{error}</span></Card>}
-      <PillButton disabled={!link.trim()} onClick={() => { if (!open(link)) setError('That is not a verifier link, an offer link or a claim code.'); }}>Continue</PillButton>
+      <PillButton disabled={!link.trim()} onClick={() => { if (!open(link)) setError('That is not a request link.'); }}>Continue</PillButton>
     </Screen>
   );
 }

@@ -31,13 +31,6 @@ export function randomToken(): string {
   return Array.from(randomBytes(16), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Short code a person can type. 8 characters from a 32-letter alphabet (no 0/O/1/I) = 40 bits.
-// That is enough only because a code lives for minutes and works once.
-export function randomClaimCode(): string {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  return Array.from(randomBytes(8), (b) => alphabet[b % 32]).join('');
-}
-
 // SHA-256 fingerprint of a text, as hex. Used to compare the revocation list with its anchor on the chain.
 export function sha256Hex(text: string): string {
   return Array.from(sha256(text), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -178,7 +171,7 @@ function toBase64Url(bytes: Uint8Array): string {
 export type IssuerKeyInfo = { publicJwk: Jwk; state: string }; // state: Active | Retired | Compromised
 
 export type VerifyResult =
-  | { ok: true; issuer: string; keyId: string; statusIndex: number | null; claims: Record<string, unknown> }
+  | { ok: true; issuer: string; keyId: string; type: string; statusIndex: number | null; claims: Record<string, unknown> }
   | { ok: false; code: string; message: string; keyId?: string };
 
 // Checks, in the library: issuer signature, disclosures match the signed hashes, credential expiry,
@@ -230,7 +223,7 @@ export async function verifyPresentation(input: {
     // Return only the disclosed claims, without the technical fields.
     const { iss, iat, exp, vct, cnf, revocation, ...claims } = result.payload as Record<string, unknown>;
     const statusIndex = (revocation as { idx?: number } | undefined)?.idx ?? null;
-    return { ok: true, issuer, keyId, statusIndex, claims };
+    return { ok: true, issuer, keyId, type: String(vct), statusIndex, claims };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, code: errorCode(message), keyId, message };
@@ -311,7 +304,8 @@ export type PresentationRequest = {
 };
 
 // What the registry says about a verifier.
-export type VerifierInfo = { name: string; allowedClaims: string[]; publicJwk: Jwk };
+// pinnedIssuer / pinnedType: the ONE institution and credential type a register accepts (empty = not pinned).
+export type VerifierInfo = { name: string; allowedClaims: string[]; publicJwk: Jwk; pinnedIssuer?: string; pinnedType?: string };
 
 // Verifier side: sign the request with the verifier's private key. "iss" names the verifier.
 export async function signRequest(request: PresentationRequest, privateJwk: Jwk, expiresAt: Date): Promise<string> {
@@ -353,5 +347,31 @@ export async function authenticateRequest(
     return { status: 'verified', request, verifierName: verifier.name, extraClaims };
   } catch {
     return { status: 'tampered', claimedBy };
+  }
+}
+
+// ---------- account sessions ----------
+
+// Who a session token belongs to. kind is 'person' or 'institution'.
+export type Session = { sub: string; kind: string; name: string };
+
+// Sign a session token (a JWT) with the accounts service's private key. Any service that has the matching
+// PUBLIC key can check it by itself, without calling the accounts service.
+export async function signSession(session: Session, privateJwk: Jwk, validDays: number): Promise<string> {
+  return new SignJWT({ kind: session.kind, name: session.name })
+    .setProtectedHeader({ alg: 'ES256', typ: 'session+jwt' })
+    .setSubject(session.sub)
+    .setIssuedAt()
+    .setExpirationTime(`${validDays} days`)
+    .sign(await importJWK(privateJwk, 'ES256'));
+}
+
+// Returns the session if the signature is right and it has not expired, otherwise null.
+export async function verifySession(token: string, publicJwk: Jwk): Promise<Session | null> {
+  try {
+    const { payload } = await jwtVerify(token, await importJWK(publicJwk, 'ES256'), { algorithms: ['ES256'], typ: 'session+jwt' });
+    return { sub: String(payload.sub), kind: String(payload.kind), name: String(payload.name) };
+  } catch {
+    return null;
   }
 }

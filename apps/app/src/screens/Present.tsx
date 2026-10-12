@@ -1,11 +1,11 @@
 // Sharing a proof: consent screen -> verifying -> result.
 // Everything shown comes from the signed request, the registry, the stored credential and the verifier's reply.
 import { useEffect, useState } from 'react';
-import { ALL_CLAIMS, CLAIM_LABELS } from '@true/shared';
+import { CLAIM_LABELS, SENSITIVE_CLAIMS } from '@true/shared';
 import type { RequestCheck } from '@true/credentials';
-import { answerRequest, loadRequest, pickCredential, pickCredentialFor, recordBlocked, type Answer } from '@true/wallet-core';
+import { answerRequest, loadRequest, matchingCredentials, pickCredential, recordBlocked, type Answer } from '@true/wallet-core';
 import { Avatar, Badge, Card, ConsentRow, Field, Orb, PillButton, Screen, StepList, TopBar, go, type StepItem } from '../ui.tsx';
-import { CLAIM_HELP, STEP_LABELS, browserFetch, displayValue, registry, useCards } from '../wallet.ts';
+import { STEP_LABELS, browserFetch, cardFields, registry, useCards } from '../wallet.ts';
 
 export function Present({ requestUri }: { requestUri: string }) {
   const { cards } = useCards();
@@ -32,9 +32,10 @@ export function Present({ requestUri }: { requestUri: string }) {
     return () => clearTimeout(timer);
   }, [answer, revealed, showResult]);
 
-  // The card that can answer this request; if none has every requested item, fall back to the newest card.
-  const dated = (cards ?? []).map((c) => ({ ...c, addedAt: c.stored.addedAt }));
-  const card = (check?.status === 'verified' ? pickCredentialFor(dated, check.request.claims) : undefined) ?? pickCredential(dated);
+  // The card that can answer this request: it must hold every requested field.
+  // If none does, fall back to the newest card so the screen can still explain what is asked.
+  const dated = (cards ?? []).map((c) => ({ ...c, addedAt: c.stored.addedAt, issuerId: c.stored.issuerId }));
+  const card = (check?.status === 'verified' ? matchingCredentials(dated, check.request.claims)[0] : undefined) ?? pickCredential(dated);
 
   async function respond(approve: boolean) {
     if (!check || check.status !== 'verified' || !card) return;
@@ -103,12 +104,12 @@ export function Present({ requestUri }: { requestUri: string }) {
       <Screen>
         <TopBar back="/home" />
         <Card><div className="font-semibold">No credential in this wallet</div><p className="mt-1 text-small text-muted">{verifierName} is asking for a proof, but you have nothing to share yet.</p></Card>
-        <div className="mt-4"><PillButton onClick={() => go('/claim')}>Claim a credential</PillButton></div>
+        <div className="mt-4"><PillButton onClick={() => go('/offers')}>See my offers</PillButton></div>
       </Screen>
     );
   }
   const overAsking = extraClaims.length > 0;
-  const notRequested = ALL_CLAIMS.filter((name) => !request.claims.includes(name) && name in card.claims);
+  const notRequested = cardFields(card.claims).filter((name) => !request.claims.includes(name));
 
   return (
     <Screen>
@@ -130,7 +131,7 @@ export function Present({ requestUri }: { requestUri: string }) {
       {card.stored.revoked && (
         <Card tone="bad" className="mb-4">
           <div className="font-semibold text-bad">Your credential was revoked</div>
-          <p className="mt-1 text-small">This verifier will refuse it. If the issuer has given it back, claim the new credential first.</p>
+          <p className="mt-1 text-small">This verifier will refuse it. Ask the institution to issue a new one.</p>
         </Card>
       )}
 
@@ -151,8 +152,8 @@ export function Present({ requestUri }: { requestUri: string }) {
           return (
             <ConsentRow
               key={name} label={CLAIM_LABELS[name] ?? name} locked checked={!overAsking}
-              tone={extra ? 'warn' : 'plain'}
-              description={extra ? 'Not registered for this verifier' : CLAIM_HELP[name] ?? 'Requested by this verifier'}
+              tone={extra || SENSITIVE_CLAIMS.includes(name) ? 'warn' : 'plain'}
+              description={extra ? 'Not registered for this verifier' : SENSITIVE_CLAIMS.includes(name) ? 'Sensitive: share only if you trust this verifier' : 'Requested by this verifier'}
             />
           );
         })}
@@ -215,7 +216,7 @@ function Result({ answer, verifierName, claims }: { answer: Answer; verifierName
 
       <Card className="mb-4">
         <div className="mb-1 font-semibold">{answer.decision === 'shared' ? `Sent to ${verifierName}` : 'Nothing was shared'}</div>
-        {answer.sharedClaims.map((name) => <Field key={name} label={CLAIM_LABELS[name] ?? name}>{displayValue(name, claims[name])}</Field>)}
+        {answer.sharedClaims.map((name) => <Field key={name} label={CLAIM_LABELS[name] ?? name}>{String(claims[name] ?? '')}</Field>)}
       </Card>
 
       {answer.steps.length > 0 && (

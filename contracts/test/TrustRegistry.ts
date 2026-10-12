@@ -19,7 +19,7 @@ describe('TrustRegistry', async () => {
 
   it('a stranger cannot publish keys or register anyone', async () => {
     await assert.rejects(registry.write.addIssuerKey(['issuer:a', 'key-x', '{}'], as(stranger)));
-    await assert.rejects(registry.write.registerVerifier(['verifier:x', 'X', 'name', '{}'], as(stranger)));
+    await assert.rejects(registry.write.registerVerifier(['verifier:x', 'X', 'name', '{}', ''], as(stranger)));
   });
 
   it('a key id cannot be reused, and a compromised key cannot be restored', async () => {
@@ -30,12 +30,29 @@ describe('TrustRegistry', async () => {
   });
 
   it('owner registers a verifier with its allowed claims', async () => {
-    await registry.write.registerVerifier(['verifier:lib', 'City Library', 'name,photo,pnr', '{"kty":"EC"}'], as(owner));
-    const [name, allowedClaims, , registered] = await registry.read.verifiers(['verifier:lib']);
-    assert.equal(name, 'City Library');
-    assert.equal(allowedClaims, 'name,photo,pnr');
+    await registry.write.registerVerifier(['verifier:lib', 'Gate register', 'name,blood_group', '{"kty":"EC"}', 'inst:a|StudentID'], as(owner));
+    const [name, allowedClaims, , registered, pinnedTo] = await registry.read.verifiers(['verifier:lib']);
+    assert.equal(name, 'Gate register');
+    assert.equal(allowedClaims, 'name,blood_group');
     assert.equal(registered, true);
+    assert.equal(pinnedTo, 'inst:a|StudentID');
     assert.equal((await registry.read.verifiers(['verifier:fake']))[3], false);
+    // A removed verifier is unregistered again; only the owner may remove.
+    await assert.rejects(registry.write.removeVerifier(['verifier:lib'], as(stranger)));
+    await registry.write.removeVerifier(['verifier:lib'], as(owner));
+    assert.equal((await registry.read.verifiers(['verifier:lib']))[3], false);
+  });
+
+  it('institutions are listed once, and only the owner can mark one verified', async () => {
+    await registry.write.registerIssuer(['inst:b', 'Institution B', issuer.account.address], as(owner));
+    await registry.write.registerIssuer(['inst:b', 'Institution B renamed', issuer.account.address], as(owner));
+    const count = await registry.read.issuerCount();
+    const ids = await Promise.all(Array.from({ length: Number(count) }, (_, i) => registry.read.issuerIds([BigInt(i)])));
+    assert.equal(ids.filter((id) => id === 'inst:b').length, 1);
+    assert.equal(await registry.read.issuerVerified(['inst:b']), false); // new institutions start unverified
+    await assert.rejects(registry.write.setIssuerVerified(['inst:b', true], as(issuer)));
+    await registry.write.setIssuerVerified(['inst:b', true], as(owner));
+    assert.equal(await registry.read.issuerVerified(['inst:b']), true);
   });
 
   it('status list anchor: version must increase', async () => {

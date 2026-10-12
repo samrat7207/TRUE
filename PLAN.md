@@ -355,3 +355,29 @@ Next: verifier screens in the new app, then retire the three old apps.
 **Stage 2 fix: offers inbox.** Reproduced with two origins: claiming by link/code worked, but an issued offer never reached the holder's app. Added "Link my institute record" (PNR + date of birth → 24-hour inbox token), an "Offers for you" list with Accept / Decline, and "Cancel offer" for staff. Also fixed the issuer console going blank when a session ended.
 Defaults chosen: an offer stays open 24 hours (the QR / claim code stays 10 minutes); the registry's "Offer expired" now follows the 24 hours; link failures return one generic message and are limited to 5 a minute per source.
 Phase 3 (verifier screens) not started.
+
+
+---
+
+# REBUILD of stage 2 (accounts, institutions, registers)
+
+## Part A done: accounts, institution dashboard, offers
+One app, two kinds of account (Person, Institution), email + password. Staff roles, PINs, the student database, claim codes, the Requests tab and "Link my institute record" are removed. The old `apps/wallet` and `apps/issuer-web` are deleted (git history keeps them); `apps/verifier-web` stays as the Ops console.
+
+Small decisions made (change any of them if you disagree):
+- **Accounts live in the core service** (`services/issuer-api`), not a separate service, because issuing must look people up by email without a service-to-service call. Verifiers check session tokens with a public key read from a file.
+- **Sessions** are signed tokens (ES256, 30 days) kept in the browser's localStorage. The core API also checks the account still exists on every call.
+- **One revocation list for the whole issuing service**, not one per institution: the verifier's sync (one bit list, OR-merge) stays as it was, and a list position does not reveal the institution.
+- **Institution ids** look like `inst:…`, person ids like `person:…`, credential ids like `TR-0007`.
+- **The email check and issuing share one limit** (5 a minute per institution), so issuing cannot be used to get around the check limit.
+- **An institution's own list does not show the holder's email or account id**, only what the institution typed into the fields.
+- **Delete account requires the password again.**
+- **Demo accounts:** institutions `astra@demo.true`, `ironworks@demo.true`, `nimbus@demo.true`; people `aarav@demo.true`, `isha@demo.true`, `kabir@demo.true`. Passwords come from `.env` (`DEMO_PASSWORD_INSTITUTIONS`, `DEMO_PASSWORD_PEOPLE`); if missing, random ones are generated and written there.
+- **Person tabs:** Wallet, Scan, Offers, Activity, Discover (one "not available" card); Profile opens from the avatar.
+- **Institution tabs:** Dashboard, Issue ID, Issued, Activity, Account. No search, reports or staff.
+- **Dropped:** derived claims (`age_over_18`, `is_student`), key rotation / compromise screens (the verifier still rejects a Compromised key), QR / link / claim-code issuance.
+- **Demo verifiers** (City Library: name + ID number; Nova Arena: date of birth; Campus Store: name; Free Prize Booth: unregistered) remain so the Ops console and Scan can be tried before Part B's registers exist.
+- **Old tests** for the removed features were deleted and rewritten against the new API (`tests/accounts.test.ts`, `security.test.ts`, `sync.test.ts`).
+
+## Part B (not started; waiting for "continue")
+Registers in the person app: pinned institution + credential type + fields, own key on the chain, fresh QR per check, server-side pin enforcement.

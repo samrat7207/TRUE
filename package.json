@@ -9,6 +9,7 @@
     "spike": "node scripts/spike.ts",
     "brand": "node scripts/sync-brand.mjs",
     "reset": "node scripts/reset.mjs",
+    "verify-institution": "node scripts/verify-institution.ts",
     "chain:test": "npm test -w contracts"
   },
   "devDependencies": {

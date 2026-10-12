@@ -1,13 +1,14 @@
-// The app shell: picks the screen from the address after '#'.
-// The role picker leads to General (holder) mode or to the issuer console.
+// The app shell: picks the screen from the address after '#' and from who is logged in.
+// Not logged in: welcome, sign up, log in. A PERSON gets the wallet; an INSTITUTION gets its dashboard.
 import { useEffect, useState } from 'react';
-import { RolePicker } from './screens/Start.tsx';
-import { IssuerApp } from './issuer/Issuer.tsx';
-import { Home, CredentialDetail, Claim } from './screens/Home.tsx';
-import { Scan } from './screens/Scan.tsx';
+import { useSession } from './session.ts';
+import { Welcome, SignUp, LogIn } from './screens/Auth.tsx';
+import { Home, CredentialDetail } from './screens/Wallet.tsx';
+import { Offers } from './screens/Offers.tsx';
+import { Scan } from './screens/ScanTab.tsx';
 import { Present } from './screens/Present.tsx';
-import { Activity, Discover, Profile } from './screens/More.tsx';
-import { Requests, checkMyRequests } from './screens/Requests.tsx';
+import { Activity, Discover, Profile } from './screens/Person.tsx';
+import { InstitutionApp } from './institution/Institution.tsx';
 
 // Reads the current route, e.g. "#/consent?request_uri=…" => path "/consent" plus its parameters.
 function useRoute() {
@@ -26,29 +27,24 @@ function useRoute() {
 
 export default function App() {
   const { path, params } = useRoute();
-  const holderMode = path !== '/' && !path.startsWith('/issuer');
+  const session = useSession();
 
-  // In holder mode, check on pending requests every 4 seconds wherever the holder is in the app,
-  // so an approved credential is collected without having to sit on the Requests tab.
-  useEffect(() => {
-    if (!holderMode) return;
-    const timer = setInterval(() => checkMyRequests().catch(() => {}), 4000);
-    return () => clearInterval(timer);
-  }, [holderMode]);
+  if (!session) {
+    if (path === '/signup') return <SignUp />;
+    if (path === '/login') return <LogIn />;
+    return <Welcome />;
+  }
+  if (session.account.kind === 'institution') return <InstitutionApp path={path} params={params} />;
 
   switch (path) {
-    case '/home': return <Home />;
     case '/credential': return <CredentialDetail id={params.get('id') ?? ''} />;
-    case '/claim': return <Claim initial={params.get('code') ?? ''} />;
+    case '/offers': return <Offers />;
     case '/scan': return <Scan />;
     // key: a new request address starts the consent flow from scratch.
     case '/consent': return <Present key={params.get('request_uri')} requestUri={params.get('request_uri') ?? ''} />;
-    case '/requests': return <Requests />;
     case '/activity': return <Activity />;
     case '/discover': return <Discover />;
     case '/profile': return <Profile />;
-    default:
-      // Everything under /issuer is the issuer console (staff PIN first).
-      return path.startsWith('/issuer') ? <IssuerApp path={path} params={params} /> : <RolePicker />;
+    default: return <Home />;
   }
 }

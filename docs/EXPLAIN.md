@@ -334,3 +334,47 @@ Other limits: the app only polls while it is open in holder mode; the public for
 
 ### Bug fixed alongside
 When the issuer API ended a staff session (for example after a restart), the issuer console showed a blank page. Screens now subscribe to the session and switch to the PIN screen at once.
+
+
+---
+
+# REBUILD (replaces the staff / PIN / PNR design above)
+
+Everything above this line about staff roles, PINs, the student database, claim codes, "Link my institute record" and the old wallet and issuer console describes the earlier design. It was removed. What follows is how the product works now.
+
+## Rebuild part A: accounts, institutions, offers
+
+### Two kinds of account
+Everyone signs up with an email and a password and chooses **Person** or **Institution**.
+- **Password:** stored only as `salt:hash` from Node's scrypt, a different random salt per account, compared in constant time (`services/issuer-api/src/password.ts`).
+- **Session:** logging in returns a token signed by the core service's key, valid 30 days. Any service holding the matching *public* key can check it by itself.
+- **Login limit:** 5 wrong passwords in a minute for one email lock it for a minute. Wrong password and unknown email give the same message. Passwords and emails are never written to the log.
+- **Emails are not verified** in this demo; the app says so on every sign-in screen.
+
+### Where things live (one decision worth defending)
+Accounts live **inside the core service** (`services/issuer-api`, port 4001), next to institutions and credentials, because issuing needs to ask "does a person with this email exist?" and services are not allowed to call each other. The verifier servers never call the core service: they read its session public key from a file (`data/session-public-key.json`) and check tokens locally.
+
+### Institutions
+- Every institution gets **its own signing key** when it signs up. The public half goes on the chain under the institution's id; the private half stays in the core database.
+- **Verified flag:** new institutions are Unverified. `npm run verify-institution -- <email>` sets the flag in the database and **on the chain**; the app reads it from the chain.
+- **Templates** decide the fields: Student ID, Library Card, Gym Membership, Employee ID (`packages/shared`). Every field becomes its own selectively disclosable claim. No photos anywhere.
+- **Issue ID:** the institution types the person's email. The only thing it can learn is whether a person account has exactly that email ("No TRUE user with this email" otherwise), at most **5 checks a minute**, logged without the email. There is no endpoint that lists, browses or searches people.
+- An institution sees **only its own** credentials: every query is "this id AND my institution id", so another institution's credential simply does not exist for it.
+
+### Offers
+1. Institution sends an offer (a pending credential row).
+2. The person sees "<Institution> (Verified / Unverified institution) wants to give you a <type>" in the Offers tab, with the field values.
+3. **Accept:** the wallet makes its key on the device (first time), signs the offer's nonce to prove it owns the key, and the institution's key signs the credential bound to that key. The card lands in the wallet; the row goes Pending → Active.
+4. **Reject** marks it Declined. The institution can **cancel** a pending offer.
+5. Wallet cards show the institution's name and verified flag **from the chain**, and "Verified" only if the wallet itself checked the institution's signature against its registered key.
+
+### Revocation and deletion
+- One revocation list for the whole issuing service, anchored on the chain under one id. A position in it does not reveal which institution issued the credential.
+- **Revoke** (reason code, then confirm) flips the bit; verifiers refuse after their next refresh.
+- **Delete account** asks for the password again. A person's deletion revokes every ID they hold (`holder_deleted`), cancels offers to them and clears the wallet on this device. An institution's deletion retires its key, erases the private half, and revokes everything it issued. The old session token stops working at once.
+
+### Honest limits
+- The wallet is per account **per device**: logging in on another browser shows an empty wallet (the key never leaves the first device).
+- The verifier only checks a session token's signature and expiry; it does not know an account was deleted until the token expires. (Part B has the app delete a person's registers as part of account deletion.)
+- Institutions have no key-rotation screen in this rebuild; a key is retired only when the institution is deleted.
+- The derived yes/no claims of the first version (`age_over_18`, `is_student`) are gone: the new templates list only the fields you specified.
