@@ -1,0 +1,5 @@
+{
+  "name": "@true/contracts", "version": "0.1.0", "private": true, "type": "module",
+  "scripts": { "compile": "hardhat compile", "test": "hardhat test" },
+  "devDependencies": { "hardhat": "^3.19.0", "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7", "viem": "^2.57.4" }
+}
