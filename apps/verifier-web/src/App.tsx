@@ -98,11 +98,12 @@ export default function App() {
   );
 }
 
+type Blocked = { active: number; total: number; recent: { at: string; source: string; verifierId: string; seconds: number }[] };
 type InstanceInfo = { name: string; port: number; alive: boolean; lastSyncedAt: number | null };
 
 // One card per verifier instance behind the front door, each with its own Kill and Restart button.
 function InstancePanel() {
-  const [info, setInfo] = useState<{ instances: InstanceInfo[]; now: number } | null>(null);
+  const [info, setInfo] = useState<{ instances: InstanceInfo[]; now: number; blocked: Blocked; limits: { failMax: number; failWindowSeconds: number; blockSeconds: number } } | null>(null);
 
   const refresh = () => fetch(URLS.verifierApi + '/proxy/status').then((r) => r.json()).then(setInfo).catch(() => setInfo(null));
   useEffect(() => {
@@ -136,6 +137,15 @@ function InstancePanel() {
               <button disabled={!i.alive} onClick={() => act('kill', i.name)} className={button + ' bg-rose-600'}>Kill</button>
               <button disabled={i.alive} onClick={() => act('restart', i.name)} className={button + ' bg-emerald-600'}>Restart</button>
             </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+        <b>Rate limiting:</b> {info.limits.failMax} failed attempts in {info.limits.failWindowSeconds}s blocks a source for {info.limits.blockSeconds}s.{' '}
+        <span className={info.blocked.active > 0 ? 'font-semibold text-rose-700' : ''}>Blocked sources now: {info.blocked.active}</span> · blocks since start: {info.blocked.total}
+        {info.blocked.recent.map((event, n) => (
+          <div key={n} className="font-mono text-slate-500">
+            {new Date(event.at).toLocaleTimeString()} · source {event.source} · {event.verifierId} · {event.seconds}s
           </div>
         ))}
       </div>

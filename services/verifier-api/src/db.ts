@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS status_list (
   bits_hex TEXT NOT NULL
 );
 -- What happened, without personal data: only ids, types and times.
+-- request_id is the subject of the event: a request id, or "source:<hash>" for a blocked caller.
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   ts TEXT NOT NULL,

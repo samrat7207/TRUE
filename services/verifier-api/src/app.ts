@@ -81,6 +81,17 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     return c.json({ ok: true });
   });
 
+  // The front door records things it decided itself here (for example "a source was blocked").
+  // "subject" is a hashed identifier, never an IP address or a name.
+  app.post('/internal/audit', async (c) => {
+    const body = z.object({ type: z.string(), subject: z.string() }).safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json(refuse('bad_request', 'type and subject are required'), 400);
+    const event = { id: randomToken(), ts: new Date().toISOString(), type: body.data.type, request_id: body.data.subject, instance };
+    addAuditEvent(db, event);
+    await share({ auditEvents: [event] });
+    return c.json({ ok: true });
+  });
+
   // The other instance reads everything from here when it restarts.
   app.get('/internal/state', (c) => c.json(exportState(db)));
 
