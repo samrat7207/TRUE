@@ -1,5 +1,8 @@
 // Convergence tests: two verifier instances with separate databases that share state.
 // "Killing" an instance here means its link is cut: nothing can reach it and it cannot reach its peer.
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ISSUER_ID } from '@true/shared';
 import { createHolderProof, createPresentation, generateHolderKey, generateSigningKeyPair } from '@true/credentials';
@@ -112,6 +115,61 @@ describe('two verifier instances', () => {
     mergeState(dbTwo, state);
     expect(count()).toBe(1);
     expect(requests()).toBe(1);
+  });
+
+  it('three instances: create on 1, kill 1 and 2, approve through 3 is verified', async () => {
+    const keys = await generateSigningKeyPair();
+    const localIssuer = createIssuerApp(openIssuerDb(':memory:'), keys);
+    const lookup = (id: string) => (id === ISSUER_ID ? keys.publicJwk : null);
+    const apps: App[] = [];
+    const alive = [true, true, true];
+    // Each instance sends to ALL peers and ignores the ones that are down (same rule as server.ts).
+    const fanOut = (self: number) => async (state: SharedState) => {
+      if (!alive[self]) throw new Error('down');
+      const results = await Promise.allSettled(
+        apps.map(async (peer, i) => {
+          if (i === self) return;
+          if (!alive[i]) throw new Error('down');
+          await peer.request('/internal/sync', json(state, { 'x-internal-key': KEY }));
+        }),
+      );
+      if (!results.some((r) => r.status === 'fulfilled')) throw new Error('no peer');
+    };
+    for (let i = 0; i < 3; i++) {
+      apps.push(createVerifierApp(openVerifierDb(':memory:'), lookup, { instance: String(i + 1), internalKey: KEY, sendToPeer: fanOut(i) }));
+    }
+
+    const holder = await generateHolderKey();
+    const { code } = await (await localIssuer.request('/v1/claim-codes', json({ studentId: 1 }))).json();
+    const offer = await (await localIssuer.request(`/v1/claim-codes/${code}`)).json();
+    const proof = await createHolderProof({ holderPrivateKey: holder.privateKey, holderPublicJwk: holder.publicJwk, nonce: offer.nonce, audience: ISSUER_ID });
+    const { credential } = await (await localIssuer.request('/v1/credentials', json({ code, proof }))).json();
+
+    const { requestId } = await (await apps[0].request('/v1/requests', json({ verifierId: 'verifier:nova-arena' }))).json();
+    alive[0] = false;
+    alive[1] = false;
+    const object = await (await apps[2].request(`/v1/requests/${requestId}/object`)).json();
+    const presentation = await createPresentation({
+      credential, holderPrivateKey: holder.privateKey, claims: object.claims, nonce: object.nonce, audience: object.verifierId,
+    });
+    expect((await apps[2].request(`/v1/requests/${requestId}/response`, json({ presentation }))).status).toBe(200);
+    expect((await (await apps[2].request(`/v1/requests/${requestId}`)).json()).state).toBe('verified');
+  });
+
+  it('kill all, restart one: it recovers from its own database file', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'true-')), 'verifier-1.db');
+    let db = openVerifierDb(file);
+    let app = createVerifierApp(db, () => null, { instance: '1', internalKey: KEY });
+    const { requestId } = await (await app.request('/v1/requests', json({ verifierId: 'verifier:nova-arena' }))).json();
+    await app.request('/internal/status/revoke', json({ index: 3 }, { 'x-internal-key': KEY }));
+    db.close(); // every instance is dead; nothing is left in memory
+
+    db = openVerifierDb(file); // restart with no live peer
+    app = createVerifierApp(db, () => null, { instance: '1', internalKey: KEY });
+    expect((await (await app.request(`/v1/requests/${requestId}`)).json()).state).toBe('pending');
+    expect((await (await app.request('/v1/status/3')).json()).revoked).toBe(true);
+    expect((await (await app.request('/health')).json()).lastSyncedAt).toBe(null);
+    db.close();
   });
 
   it('the sync endpoint refuses callers without the internal key', async () => {

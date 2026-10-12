@@ -5,21 +5,32 @@ import { BRAND, CLAIM_LABELS, URLS } from '@true/shared';
 
 type Verifier = { id: string; name: string; purpose: string; claims: string[] };
 type Check = { requestId: string; walletUrl: string; qr: string };
-type Status = { state: 'pending' | 'verified' | 'denied' | 'expired'; result: { claims?: Record<string, unknown>; issuer?: string; code?: string; message?: string } | null };
+type Status = { state: 'pending' | 'verified' | 'denied' | 'expired'; result: { claims?: Record<string, unknown>; issuer?: string; code?: string; message?: string } | null; servedBy?: string | null };
 
 export default function App() {
   const [verifiers, setVerifiers] = useState<Verifier[]>([]);
   const [active, setActive] = useState<Verifier | null>(null);
   const [check, setCheck] = useState<Check | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
-  useEffect(() => { fetch(URLS.verifierApi + '/v1/verifiers').then((r) => r.json()).then((b) => setVerifiers(b.verifiers)); }, []);
+  // Load the verifier list; keep trying every 2 seconds while no server is available.
+  useEffect(() => {
+    if (verifiers.length > 0) return;
+    const load = () => fetch(URLS.verifierApi + '/v1/verifiers').then((r) => r.json()).then((b) => { if (b.verifiers) setVerifiers(b.verifiers); }).catch(() => {});
+    load();
+    const timer = setInterval(load, 2000);
+    return () => clearInterval(timer);
+  }, [verifiers.length]);
 
   // Create a request (fresh nonce on the server) and draw the wallet link as a QR code.
   async function start(verifier: Verifier) {
     setActive(verifier);
     setStatus(null);
-    const response = await fetch(URLS.verifierApi + '/v1/requests', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ verifierId: verifier.id }) });
+    setCheck(null);
+    const response = await fetch(URLS.verifierApi + '/v1/requests', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ verifierId: verifier.id }) }).catch(() => null);
+    setUnavailable(!response || !response.ok);
+    if (!response || !response.ok) return;
     const body = await response.json();
     setCheck({ requestId: body.requestId, walletUrl: body.walletUrl, qr: await QRCode.toDataURL(body.walletUrl, { width: 260, margin: 1 }) });
   }
@@ -27,10 +38,18 @@ export default function App() {
   // Live update: ask the API once a second until the request is no longer pending.
   useEffect(() => {
     if (!check) return;
+    let extraTries = 0;
     const timer = setInterval(async () => {
-      const body: Status = await fetch(`${URLS.verifierApi}/v1/requests/${check.requestId}`).then((r) => r.json());
-      setStatus(body);
-      if (body.state !== 'pending') clearInterval(timer);
+      const response = await fetch(`${URLS.verifierApi}/v1/requests/${check.requestId}`).catch(() => null);
+      setUnavailable(!response || response.status === 503);
+      if (!response || !response.ok) return;
+      const next: Status = { ...(await response.json()), servedBy: response.headers.get('X-Served-By') };
+      // Disclosed claims are never copied between instances, so only the instance that did the check has them.
+      // Keep an answer that has the claims over a later one that does not.
+      setStatus((previous) => (previous?.result?.claims && !next.result?.claims ? previous : next));
+      // Stop when finished. For "verified", ask a few more times so the round-robin reaches the instance holding the claims.
+      const hasClaims = Boolean(next.result?.claims);
+      if (next.state !== 'pending' && (next.state !== 'verified' || hasClaims || ++extraTries > 6)) clearInterval(timer);
     }, 1000);
     return () => clearInterval(timer);
   }, [check]);
@@ -55,6 +74,8 @@ export default function App() {
 
       <InstancePanel />
 
+      {unavailable && <div className="mb-6 rounded-xl border-2 border-amber-400 bg-amber-50 p-4 text-amber-900"><b>No server available.</b> Every verifier instance is down. Restart one above; this page recovers on its own.</div>}
+
       {active && check && (
         <div className="grid gap-6 md:grid-cols-2">
           <div className="rounded-xl bg-white p-5 text-center shadow">
@@ -73,7 +94,7 @@ export default function App() {
 
 type InstanceInfo = { name: string; port: number; alive: boolean; lastSyncedAt: number | null };
 
-// Status of the two verifier instances behind the front door, with a demo kill/restart button.
+// One card per verifier instance behind the front door, each with its own Kill and Restart button.
 function InstancePanel() {
   const [info, setInfo] = useState<{ instances: InstanceInfo[]; now: number } | null>(null);
 
@@ -84,26 +105,42 @@ function InstancePanel() {
     return () => clearInterval(timer);
   }, []);
 
-  const act = (action: 'kill' | 'restart') => fetch(`${URLS.verifierApi}/proxy/${action}/1`, { method: 'POST' }).then(refresh);
+  // name is an instance number, or "all".
+  const act = (action: 'kill' | 'restart', name: string) => fetch(`${URLS.verifierApi}/proxy/${action}/${name}`, { method: 'POST' }).then(refresh);
 
-  if (!info) return <div className="mb-6 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">Front door (port 4000) is not reachable.</div>;
-  const first = info.instances[0];
+  if (!info) return <div className="mb-6 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">Front door (port 4000) is not reachable. Is "npm run dev" running?</div>;
+  const button = 'rounded px-2 py-1 text-xs text-white disabled:opacity-30';
   return (
-    <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl bg-white p-3 text-sm shadow-sm">
-      {info.instances.map((i) => (
-        <div key={i.name} className={`rounded-lg border px-3 py-2 ${i.alive ? 'border-emerald-300 bg-emerald-50' : 'border-rose-300 bg-rose-50'}`}>
-          <div className="font-semibold">Instance {i.name} <span className="font-normal text-slate-500">:{i.port}</span> · {i.alive ? 'alive' : 'dead'}</div>
-          <div className="text-xs text-slate-500">
-            {i.lastSyncedAt ? `last synced ${Math.max(0, Math.round((info.now - i.lastSyncedAt) / 1000))} seconds ago` : 'not synced yet'}
+    <div className="mb-6 rounded-xl bg-white p-3 text-sm shadow-sm">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs text-slate-500">Verifier instances behind the front door (port 4000) · {info.instances.filter((i) => i.alive).length} of {info.instances.length} alive</span>
+        <span className="flex gap-2">
+          <button onClick={() => act('kill', 'all')} className={button + ' bg-rose-600'}>Kill all</button>
+          <button onClick={() => act('restart', 'all')} className={button + ' bg-emerald-600'}>Restart all</button>
+        </span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {info.instances.map((i) => (
+          <div key={i.name} className={`rounded-lg border px-3 py-2 ${i.alive ? 'border-emerald-300 bg-emerald-50' : 'border-rose-300 bg-rose-50'}`}>
+            <div className="font-semibold">Instance {i.name} <span className="font-normal text-slate-500">:{i.port}</span> · {i.alive ? 'alive' : 'dead'}</div>
+            <div className="mb-2 text-xs text-slate-500">
+              {i.lastSyncedAt ? `last synced ${Math.max(0, Math.round((info.now - i.lastSyncedAt) / 1000))} seconds ago` : 'not synced yet'}
+            </div>
+            <div className="flex gap-2">
+              <button disabled={!i.alive} onClick={() => act('kill', i.name)} className={button + ' bg-rose-600'}>Kill</button>
+              <button disabled={i.alive} onClick={() => act('restart', i.name)} className={button + ' bg-emerald-600'}>Restart</button>
+            </div>
           </div>
-        </div>
-      ))}
-      <button onClick={() => act(first.alive ? 'kill' : 'restart')} className={`rounded-lg px-3 py-2 text-white ${first.alive ? 'bg-rose-600' : 'bg-emerald-600'}`}>
-        {first.alive ? 'Kill instance 1' : 'Restart instance 1'}
-      </button>
-      <span className="text-xs text-slate-500">All traffic goes through the front door on port 4000.</span>
+        ))}
+      </div>
     </div>
   );
+}
+
+// Small badge: which instance answered (from the front door's X-Served-By header).
+function ServedBy({ status }: { status: Status }) {
+  if (!status.servedBy) return null;
+  return <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-white">Served by {status.servedBy}</span>;
 }
 
 function Result({ status }: { status: Status | null }) {
@@ -114,7 +151,7 @@ function Result({ status }: { status: Status | null }) {
     const claims = status.result?.claims ?? {};
     return (
       <div className="rounded-xl border-2 border-emerald-500 bg-emerald-50 p-5 shadow">
-        <div className="text-3xl font-bold text-emerald-700">✓ Verified</div>
+        <div className="flex items-center justify-between"><div className="text-3xl font-bold text-emerald-700">✓ Verified</div><ServedBy status={status} /></div>
         <div className="mb-3 text-xs text-emerald-800">Signed by {status.result?.issuer}. This is everything we received:</div>
         {Object.entries(claims).map(([name, value]) => (
           <div key={name} className="flex items-center justify-between gap-3 border-t border-emerald-200 py-2 text-sm">
@@ -129,6 +166,7 @@ function Result({ status }: { status: Status | null }) {
   }
   return (
     <div className="rounded-xl border-2 border-rose-500 bg-rose-50 p-5 shadow">
+      <div className="float-right"><ServedBy status={status} /></div>
       <div className="text-3xl font-bold text-rose-700">✗ {status.state === 'expired' ? 'Expired' : 'Denied'}</div>
       <div className="mt-2 text-sm text-rose-800">{status.result?.code ?? 'request_expired'}</div>
       <div className="text-xs text-rose-700">{status.result?.message}</div>

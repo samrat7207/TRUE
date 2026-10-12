@@ -325,3 +325,5 @@ Convergence and pivot arrive at times we do not control; they will eat into M5â€
 - Verifier databases were renamed to `verifier-1.db` / `verifier-2.db` (new columns); the old `verifier.db` is unused.
 - Added a minimal verifier audit table and a status-bit store ahead of M2/M4 so the merge rules are real. Verification does not consult the status bits yet.
 - Verifier screen: instance status panel and Kill / Restart instance 1 button.
+
+**Convergence upgrade done.** Instance count configurable (`VERIFIER_INSTANCES`, default 3: ports 4002/4012/4022). Front door does round-robin among alive instances with `X-Served-By`, retries on another instance, and returns a friendly 503 when none are alive. Sync fans out to all peers; restart pulls from any live peer. Verifier screen has a card per instance with its own Kill/Restart, plus Kill all / Restart all, a "Served by" badge and a "No server available" state.

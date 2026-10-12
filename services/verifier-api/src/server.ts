@@ -1,5 +1,5 @@
-// Starts ONE verifier instance. The front door (proxy.ts) starts two of these:
-//   instance 1 on port 4002, instance 2 on port 4012, each with its own database file.
+// Starts ONE verifier instance. The front door (proxy.ts) starts several of these:
+// instance N on port 4002, 4012, 4022, ... each with its own database file verifier-N.db.
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
@@ -9,7 +9,8 @@ import { mergeState, type SharedState } from './sync.ts';
 
 const INSTANCE = process.env.INSTANCE ?? '1';
 const PORT = Number(process.env.PORT ?? 4002);
-const PEER_URL = process.env.PEER_URL ?? ''; // the other instance, e.g. http://localhost:4012
+// The other instances, e.g. "http://localhost:4012,http://localhost:4022"
+const PEER_URLS = (process.env.PEER_URLS ?? '').split(',').filter(Boolean);
 const INTERNAL_KEY = process.env.INTERNAL_SYNC_KEY ?? '';
 
 // Private files of the verifier (its own database). Git-ignored.
@@ -26,9 +27,9 @@ function getIssuerPublicJwk(issuerId: string) {
   return registry.issuers?.[issuerId]?.publicJwk ?? null;
 }
 
-// Calls the other instance's /internal endpoints with the shared secret. Gives up after 1 second.
-async function callPeer(path: string, body?: SharedState) {
-  const response = await fetch(PEER_URL + path, {
+// Calls one peer's /internal endpoint with the shared secret. Gives up after 1 second.
+async function callPeer(peerUrl: string, path: string, body?: SharedState) {
+  const response = await fetch(peerUrl + path, {
     method: body ? 'POST' : 'GET',
     headers: { 'content-type': 'application/json', 'x-internal-key': INTERNAL_KEY },
     body: body ? JSON.stringify(body) : undefined,
@@ -38,21 +39,33 @@ async function callPeer(path: string, body?: SharedState) {
   return response.json();
 }
 
+// Send a change to ALL peers at once. Unreachable peers are ignored.
+// Fails only if nobody received it, so "last synced" means at least one peer has our latest state.
+async function sendToPeers(state: SharedState) {
+  const results = await Promise.allSettled(PEER_URLS.map((peer) => callPeer(peer, '/internal/sync', state)));
+  if (!results.some((result) => result.status === 'fulfilled')) throw new Error('no peer reachable');
+}
+
 const db = openVerifierDb(fileURLToPath(new URL(`verifier-${INSTANCE}.db`, DATA_DIR)));
+
+// Catch up after a restart: pull the full state once from the first live peer.
+// If no peer is alive we simply continue with what is in our own database file.
+let caughtUp = false;
+for (const peer of PEER_URLS) {
+  try {
+    mergeState(db, await callPeer(peer, '/internal/state'));
+    caughtUp = true;
+    console.log(`Instance ${INSTANCE} caught up from ${peer}`);
+    break;
+  } catch { /* try the next peer */ }
+}
+if (!caughtUp) console.log(`Instance ${INSTANCE}: no live peer, starting from its own database`);
+
 const app = createVerifierApp(db, getIssuerPublicJwk, {
   instance: INSTANCE,
   internalKey: INTERNAL_KEY,
-  sendToPeer: PEER_URL ? (state) => callPeer('/internal/sync', state) : undefined,
+  sendToPeer: PEER_URLS.length ? sendToPeers : undefined,
+  syncedAtStart: caughtUp,
 });
-
-// Catch up after a restart: copy whatever the other instance learned while we were down.
-if (PEER_URL) {
-  try {
-    mergeState(db, await callPeer('/internal/state'));
-    console.log(`Instance ${INSTANCE} caught up from its peer`);
-  } catch {
-    console.log(`Instance ${INSTANCE}: peer not reachable yet, starting with local state`);
-  }
-}
 
 serve({ fetch: app.fetch, port: PORT }, () => console.log(`Verifier instance ${INSTANCE} listening on http://localhost:${PORT}`));

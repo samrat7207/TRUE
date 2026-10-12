@@ -142,3 +142,11 @@ Disclosed claim values (name, photo, PNR) are removed before sending. The other 
 
 ### Tests (`tests/convergence.test.ts`)
 Kill instance 1 mid-request then approve through instance 2 = verified; cross-instance replay refused; shared data has no claims; revocation on one appears on the other and survives merging old data; same events merged twice = no duplicates; sync without the key = 403.
+
+### Upgrade: three instances, round-robin
+- `VERIFIER_INSTANCES` (default 3) sets how many run: ports 4002, 4012, 4022 with `verifier-1.db`, `-2.db`, `-3.db`. Front door stays on 4000.
+- The front door sends each request to the next alive instance in turn and adds the header `X-Served-By: instance N`. If a forward fails it tries another alive instance. With none alive it answers 503 `no_server_available`, and the 2-second health check brings service back as soon as one instance returns.
+- Each instance sends every change to **all** peers at the same time and ignores the ones it cannot reach. Merge rules are unchanged.
+- A restarted instance pulls the full state once from the first live peer; if no peer is alive it carries on from its own database file. "Last synced" is set at that pull, so it is correct after a restart.
+- Because disclosed claims are never copied between instances, only the instance that did the check holds them. The verifier page keeps polling a few more times after "verified" until the round-robin reaches that instance, and never replaces an answer that has claims with one that does not.
+- Tests added: create on 1, kill 1 and 2, approve through 3 = verified; kill all then restart one = it still has its requests from its own database file.

@@ -23,14 +23,15 @@ const refuse = (code: string, message: string) => ({ error: { code, message } })
 export type InstanceOptions = {
   instance?: string; // name shown in the status panel, e.g. "1"
   internalKey?: string; // secret both instances know; protects /internal/*
-  sendToPeer?: (state: SharedState) => Promise<unknown>; // delivers changes to the other instance
+  sendToPeer?: (state: SharedState) => Promise<unknown>; // delivers changes to the other instances
+  syncedAtStart?: boolean; // true if this instance pulled the full state from a peer when it started
 };
 
 export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKeyLookup, options: InstanceOptions = {}) {
   const app = new Hono();
   app.use('*', cors());
   const instance = options.instance ?? '1';
-  let lastSyncedAt: number | null = null;
+  let lastSyncedAt: number | null = options.syncedAtStart ? Date.now() : null;
 
   const getVerifier = (id: string) => db.prepare('SELECT * FROM verifiers WHERE id = ?').get(id) as VerifierRow | undefined;
   const getRequest = (id: string) => db.prepare('SELECT * FROM requests WHERE id = ?').get(id) as RequestRow | undefined;
