@@ -3,7 +3,6 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
-import { URLS } from '@true/shared';
 import { openVerifierDb } from './db.ts';
 import { createVerifierApp } from './app.ts';
 import { mergeState, type SharedState } from './sync.ts';
@@ -13,9 +12,6 @@ const PORT = Number(process.env.PORT ?? 4002);
 // The other instances, e.g. "http://localhost:4012,http://localhost:4022"
 const PEER_URLS = (process.env.PEER_URLS ?? '').split(',').filter(Boolean);
 const INTERNAL_KEY = process.env.INTERNAL_SYNC_KEY ?? '';
-// Partner access, both from .env: the API key, and the partner's web origin(s) for CORS (comma separated).
-const PARTNER_API_KEY = process.env.PARTNER_API_KEY || undefined;
-const PARTNER_ORIGINS = (process.env.PARTNER_ORIGIN ?? '').split(',').filter(Boolean);
 
 // Private files of the verifier (its own database). Git-ignored.
 const DATA_DIR = new URL('../data/', import.meta.url);
@@ -70,8 +66,6 @@ const app = createVerifierApp(db, getIssuerPublicJwk, {
   internalKey: INTERNAL_KEY,
   sendToPeer: PEER_URLS.length ? sendToPeers : undefined,
   syncedAtStart: caughtUp,
-  apiKey: PARTNER_API_KEY,
-  allowedOrigins: [URLS.wallet, URLS.verifierWeb, ...PARTNER_ORIGINS],
 });
 
 serve({ fetch: app.fetch, port: PORT }, () => console.log(`Verifier instance ${INSTANCE} listening on http://localhost:${PORT}`));
