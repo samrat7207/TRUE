@@ -4,7 +4,7 @@ import { BRAND, CLAIM_LABELS, ALL_CLAIMS, URLS } from '@true/shared';
 import { authenticateRequest, createHolderProof, createPresentation, readCredential, type RequestCheck } from '@true/credentials';
 import { createRegistryReader } from '@true/registry';
 import {
-  addCredential, addHistory, getCredentials, getHistory, getHolderKey, removeCredential,
+  addCredential, addHistory, getCredentials, getHistory, getHolderKey, pickCredential, removeCredential,
   type HistoryEntry, type StoredCredential,
 } from './storage.ts';
 
@@ -105,7 +105,7 @@ function Card({ stored, onRemove }: { stored: StoredCredential; onRemove: () => 
         <div className="min-w-0">
           <div className="truncate text-lg font-semibold">{String(claims.name)}</div>
           <div className="truncate text-xs opacity-80">{stored.issuerName}</div>
-          <div className="text-xs opacity-80">Student credential</div>
+          <div className="text-xs opacity-80">Student credential · added {new Date(stored.addedAt).toLocaleString()}</div>
         </div>
       </div>
       <button onClick={() => setOpen(!open)} className="mt-3 text-xs underline opacity-90">{open ? 'Hide' : 'Show'} everything inside this card</button>
@@ -151,6 +151,12 @@ function Claim({ initialCode }: { initialCode: string }) {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error.message);
+      // A re-issued credential replaces any older card for the same student,
+      // so a stale card can never be presented by mistake.
+      const fresh = await readCredential(result.credential);
+      for (const old of await getCredentials()) {
+        if ((await readCredential(old.credential)).pnr === fresh.pnr) await removeCredential(old.id);
+      }
       await addCredential(result.credential, result.issuerName);
       goHome();
     } catch (e) {
@@ -193,8 +199,8 @@ function Present({ requestUri }: { requestUri: string }) {
         // Who is really asking? Check the request's signature against the key registered on the chain.
         // Everything shown below comes from the signed request and the registry, not from the plain reply.
         setCheck(await authenticateRequest(body.signedRequest ?? '', (id) => registry.getVerifier(id)));
-        // Use the first credential in the wallet (the demo has one credential type).
-        const first = (await getCredentials())[0];
+        // Use the newest card in the wallet (the demo has one credential type).
+        const first = pickCredential(await getCredentials());
         if (!first) throw new Error('You have no credential in this wallet yet.');
         setStored(first);
         setClaims(await readCredential(first.credential));

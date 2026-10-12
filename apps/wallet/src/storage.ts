@@ -52,6 +52,13 @@ export async function addCredential(credential: string, issuerName: string): Pro
   await set('credentials', list);
 }
 
+// Which card to present: the most recently added one.
+// (Bug fixed here: the wallet used to take the FIRST card, so an old card left in the wallet was
+// presented instead of a freshly issued one.)
+export function pickCredential<T extends { addedAt: string }>(cards: T[]): T | undefined {
+  return [...cards].sort((a, b) => b.addedAt.localeCompare(a.addedAt))[0];
+}
+
 export async function removeCredential(id: string): Promise<void> {
   await set('credentials', (await getCredentials()).filter((c) => c.id !== id));
 }
