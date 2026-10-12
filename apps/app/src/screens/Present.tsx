@@ -149,6 +149,11 @@ export function Present({ requestUri }: { requestUri: string }) {
             <Field label="Your card">{templateLabel(card.type)} · {card.stored.id}</Field>
           </div>
         )}
+        {pin && (
+          <p className="mt-3 rounded-row bg-warn-soft p-2 text-small text-warn">
+            <b>{pin.owner} will keep these details in this register's visitor list</b>{pin.retentionDays ? ` for ${pin.retentionDays} days` : ''}. Only they can see it.
+          </p>
+        )}
       </Card>
 
       {request.claims.some((name) => SENSITIVE_CLAIMS.includes(name)) && (

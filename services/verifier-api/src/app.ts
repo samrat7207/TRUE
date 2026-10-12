@@ -6,11 +6,11 @@ import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
 import { LOAD_TEST_VERIFIER_ID, REGISTER_SERVICE_ID, TEMPLATES, URLS } from '@true/shared';
-import { verifyPresentation, verifySession, signRequest, randomToken, type IssuerKeyInfo, type Jwk, type Session } from '@true/credentials';
-import type { VerifierRow, RequestRow, RegisterRow } from './db.ts';
+import { verifyPresentation, verifySession, signRequest, randomToken, sha256Hex, type IssuerKeyInfo, type Jwk, type Session } from '@true/credentials';
+import type { VerifierRow, RequestRow, RegisterRow, VisitRow, DenialRow } from './db.ts';
 import { buildSteps } from './steps.ts';
 import {
-  addAuditEvent, deleteLoadTestRequests, exportState, saveRegister, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
+  addAuditEvent, deleteLoadTestRequests, exportState, purgeOldVisits, saveDenial, saveRegister, saveVisit, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
 } from './sync.ts';
 
 const REQUEST_MINUTES = 5;
@@ -29,7 +29,8 @@ export type InstanceOptions = {
   syncedAtStart?: boolean;
   verifierKeys?: Record<string, Jwk>;
   // The accounts service's PUBLIC key, used to check session tokens here without calling that service.
-  getSessionKey?: () => Jwk | null; // verifier id => private key used to sign that verifier's requests // true if this instance pulled the full state from a peer when it started
+  getSessionKey?: () => Jwk | null;
+  visitRetentionDays?: number; // how long visitor-list rows are kept (default 30) // verifier id => private key used to sign that verifier's requests // true if this instance pulled the full state from a peer when it started
 };
 
 export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLookup, options: InstanceOptions = {}) {
@@ -195,6 +196,57 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     return c.json({ ok: true, deleted: mine.length });
   });
 
+  // ---------- visitor list ----------
+
+  const retentionDays = options.visitRetentionDays ?? 30;
+
+  // Valid / Revoked / Issuer key compromised, looked up NOW from our revocation list and the chain registry.
+  // It is never stored, so an ID revoked after a visit shows as Revoked the next time the list is read.
+  async function liveStatus(visit: VisitRow): Promise<'valid' | 'revoked' | 'key_compromised'> {
+    if (isRevoked(db, visit.status_index)) return 'revoked';
+    const key = await getIssuerKey(visit.issuer, visit.key_id);
+    return key?.state === 'Compromised' ? 'key_compromised' : 'valid';
+  }
+
+  // Only the register's OWNER may read its visitor list.
+  app.get('/v1/registers/:id/visits', async (c) => {
+    const person = await personFrom(c);
+    if (!person) return c.json(notSignedIn, 401);
+    const register = liveRegister(c.req.param('id'));
+    if (!register) return c.json(refuse('unknown_register', 'No such register'), 404);
+    if (register.owner_id !== person.sub) return c.json(refuse('forbidden', 'Only the owner of this register can see its visitors'), 403);
+
+    purgeOldVisits(db, retentionDays);
+    const visits = db.prepare('SELECT * FROM visits WHERE register_id = ? ORDER BY verified_at').all(register.id) as VisitRow[];
+    // Group the visits by credential: one line per person's ID.
+    const groups = new Map<string, VisitRow[]>();
+    for (const visit of visits) groups.set(visit.credential_id, [...(groups.get(visit.credential_id) ?? []), visit]);
+    const visitors = await Promise.all([...groups.entries()].map(async ([credentialId, rows], index) => {
+      const latest = rows.at(-1)!;
+      const fields = JSON.parse(latest.fields_json) as Record<string, unknown>;
+      return {
+        credentialId,
+        name: typeof fields.name === 'string' ? fields.name : `Visitor #${index + 1}`, // a name only if this register asked for it
+        visits: rows.length,
+        firstVerifiedAt: rows[0].verified_at,
+        lastVerifiedAt: latest.verified_at,
+        status: await liveStatus(latest),
+        issuer: latest.issuer,
+        issuerName: register.issuer_name,
+        type: latest.type,
+        fields,
+        servedBy: [...new Set(rows.map((row) => row.instance))],
+      };
+    }));
+    const denials = db.prepare('SELECT code, COUNT(*) AS n FROM register_denials WHERE register_id = ? GROUP BY code').all(register.id) as { code: string; n: number }[];
+    return c.json({
+      register: registerView(register),
+      visitors: visitors.sort((a, b) => b.lastVerifiedAt.localeCompare(a.lastVerifiedAt)),
+      denied: { total: denials.reduce((sum, d) => sum + d.n, 0), byReason: Object.fromEntries(denials.map((d) => [d.code, d.n])) },
+      retentionDays,
+    });
+  });
+
   // The QR icon: a FRESH request every time (new nonce, 2 minutes), asking for the register's stored fields.
   app.post('/v1/registers/:id/requests', async (c) => {
     const person = await personFrom(c);
@@ -251,7 +303,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     const register = request.register_id ? liveRegister(request.register_id) : undefined;
     if (request.register_id && !register) return c.json(refuse('register_deleted', 'This register was deleted'), 404);
     const content = {
-      ...(register ? { register: { id: register.id, name: register.name, owner: register.owner_name, issuerId: register.issuer_id, issuerName: register.issuer_name, type: register.type } } : {}),
+      ...(register ? { register: { id: register.id, name: register.name, owner: register.owner_name, issuerId: register.issuer_id, issuerName: register.issuer_name, type: register.type, retentionDays } } : {}),
       requestId: request.id,
       verifierId: verifier.id,
       purpose: register?.purpose ?? verifier.purpose,
@@ -330,6 +382,24 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       return c.json(refuse('request_already_answered', 'This request was already answered'), 409);
     }
     await recordAndShare(outcome.state === 'verified' ? 'presentation.verified' : 'presentation.failed', request.id);
+
+    // Visitor list. A successful check through a register is kept: only the fields the register asked for.
+    // A refused check keeps NO details: just the reason code and the time.
+    if (register && outcome.state === 'verified' && result.ok && result.statusIndex !== null) {
+      const visit: VisitRow = {
+        id: randomToken(), register_id: register.id,
+        credential_id: sha256Hex(`${result.issuer}|${result.statusIndex}`).slice(0, 16),
+        issuer: result.issuer, key_id: result.keyId, status_index: result.statusIndex, type: result.type,
+        fields_json: JSON.stringify(Object.fromEntries(wanted.map((claim) => [claim, result.claims[claim]]))),
+        verified_at: new Date().toISOString(), instance,
+      };
+      saveVisit(db, visit);
+      await share({ visits: [visit] });
+    } else if (register && outcome.state === 'denied') {
+      const denial: DenialRow = { id: randomToken(), register_id: register.id, code: (outcome.result as { code: string }).code, at: new Date().toISOString() };
+      saveDenial(db, denial);
+      await share({ denials: [denial] });
+    }
     return c.json({ state: outcome.state, ...outcome.result });
   });
 

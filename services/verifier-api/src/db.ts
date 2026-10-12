@@ -31,6 +31,15 @@ export type RegisterRow = {
   created_at: string; updated_at: string; deleted: number;
 };
 
+// One successful check through a register. It keeps ONLY the fields that register asked for and the holder
+// agreed to share. The credential's revocation position and key id are kept so its status can be looked up live.
+export type VisitRow = {
+  id: string; register_id: string; credential_id: string; // credential_id: an opaque fingerprint, the same for every visit with one credential
+  issuer: string; key_id: string; status_index: number; type: string; fields_json: string; verified_at: string; instance: string;
+};
+// A refused check through a register: the reason code and the time, nothing about the person or the credential.
+export type DenialRow = { id: string; register_id: string; code: string; at: string };
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS verifiers (
   id TEXT PRIMARY KEY,
@@ -62,6 +71,24 @@ CREATE TABLE IF NOT EXISTS registers (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   deleted INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS visits (
+  id TEXT PRIMARY KEY,
+  register_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  issuer TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  status_index INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  fields_json TEXT NOT NULL,
+  verified_at TEXT NOT NULL,
+  instance TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS register_denials (
+  id TEXT PRIMARY KEY,
+  register_id TEXT NOT NULL,
+  code TEXT NOT NULL,
+  at TEXT NOT NULL
 );
 -- Cached revocation bits (one row). 1 = revoked.
 CREATE TABLE IF NOT EXISTS status_list (

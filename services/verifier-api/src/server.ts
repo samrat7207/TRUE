@@ -75,6 +75,7 @@ const SESSION_KEY_FILE = new URL('../../../data/session-public-key.json', import
 
 const app = createVerifierApp(db, getIssuerKey, {
   getSessionKey: () => (existsSync(SESSION_KEY_FILE) ? JSON.parse(readFileSync(SESSION_KEY_FILE, 'utf8')) : null),
+  visitRetentionDays: Number(process.env.VISIT_RETENTION_DAYS ?? 30),
   verifierKeys,
   instance: INSTANCE,
   internalKey: INTERNAL_KEY,

@@ -40,12 +40,13 @@ export function Registers() {
         {registers?.map((register) => (
           <Card key={register.id}>
             <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="font-semibold">{register.name}</div>
+              {/* Tap the register to open its visitor list. */}
+              <button onClick={() => go(`/register-visitors?id=${register.id}`)} className="min-w-0 flex-1 text-left">
+                <div className="font-semibold">{register.name} <span className="font-normal text-muted">›</span></div>
                 <div className="text-small text-muted">{register.purpose}</div>
                 <div className="mt-1 text-small">{templateLabel(register.type)} from {register.issuerName}</div>
                 <div className="text-tiny text-muted">Asks for: {register.fields.map((f) => CLAIM_LABELS[f] ?? f).join(', ')}</div>
-              </div>
+              </button>
               {/* QR icon: opens the check screen, which makes a fresh request. */}
               <button onClick={() => go(`/register?id=${register.id}`)} aria-label="Show QR" className="flex h-12 w-12 shrink-0 items-center justify-center rounded-row bg-ink text-white">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2v2h-2zM14 18h2v2h-2zM18 18h2v2h-2z" /></svg>

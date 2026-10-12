@@ -391,3 +391,11 @@ Registers in the person app: pinned institution + credential type + fields, own 
 - Person tabs are now Wallet, Scan, Offers, Registers; Activity and the "Government documents: not available" card moved into Profile.
 - Deleting a person account also deletes their registers (the app calls the verifier as part of deletion).
 - Not done in this fast pass: browser verification, README / EXPLAIN updates, extra tests beyond the five requested.
+
+## Visitor list done. Decisions
+- A successful check through a register stores a visit (only the fields that register asked for). This REVERSES the earlier rule for these rows: visits are replicated to all instances (union by id) so the list survives an instance dying. Other request results still do not carry claims between instances.
+- "Credential id" is an opaque fingerprint: the first 16 hex of SHA-256(issuer + revocation position). Same credential, same fingerprint; it is not the institution's own id.
+- Status (Valid / Revoked / Issuer key compromised) is computed on every read from the verifier's revocation list and the chain, never stored. Revoked visits stay in the list.
+- Denied attempts store only a reason code and a time per register, nothing about the person.
+- Only the owner can read a register's visitors (403 otherwise). Deleting a register deletes its visits on every instance. Rows older than `VISIT_RETENTION_DAYS` (default 30) are deleted when the list is read.
+- The consent screen tells the holder that the owner keeps these details and for how long.

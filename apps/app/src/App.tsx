@@ -9,6 +9,7 @@ import { Scan } from './screens/ScanTab.tsx';
 import { Present } from './screens/Present.tsx';
 import { Activity, Profile } from './screens/Person.tsx';
 import { Registers, NewRegister, RegisterCheck } from './screens/Registers.tsx';
+import { RegisterVisitors } from './screens/Visitors.tsx';
 import { InstitutionApp } from './institution/Institution.tsx';
 
 // Reads the current route, e.g. "#/consent?request_uri=…" => path "/consent" plus its parameters.
@@ -46,6 +47,7 @@ export default function App() {
     case '/activity': return <Activity />;
     case '/registers': return <Registers />;
     case '/register-new': return <NewRegister />;
+    case '/register-visitors': return <RegisterVisitors key={params.get('id')} id={params.get('id') ?? ''} />;
     case '/register': return <RegisterCheck key={params.get('id')} id={params.get('id') ?? ''} />;
     case '/profile': return <Profile />;
     default: return <Home />;

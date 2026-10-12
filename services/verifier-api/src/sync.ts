@@ -4,7 +4,7 @@
 // Nothing shared here contains personal data: disclosed claim values are stripped before sending.
 import type { DatabaseSync } from 'node:sqlite';
 import { LOAD_TEST_VERIFIER_ID, isBitSet, orHex, setBit } from '@true/shared';
-import type { RequestRow, RegisterRow } from './db.ts';
+import type { RequestRow, RegisterRow, VisitRow, DenialRow } from './db.ts';
 
 export type AuditEvent = { id: string; ts: string; type: string; request_id: string; instance: string };
 export type SharedRequest = Omit<RequestRow, 'result_json'> & { result: Record<string, unknown> | null };
@@ -13,6 +13,10 @@ export type SharedState = {
   statusBitsHex?: string;
   auditEvents?: AuditEvent[];
   registers?: RegisterRow[];
+  // Visitor-list rows. Unlike request results, these DO carry the disclosed fields: the holder agreed to the
+  // register keeping them, and every instance must be able to show the list.
+  visits?: VisitRow[];
+  denials?: DenialRow[];
   deleteLoadTest?: boolean; // "the load test is over: delete its synthetic requests"
 };
 
@@ -73,6 +77,32 @@ export function saveRegister(db: DatabaseSync, r: RegisterRow): void {
   if (local && local.updated_at >= r.updated_at) return;
   db.prepare(`INSERT OR REPLACE INTO registers (id, owner_id, owner_name, name, purpose, issuer_id, issuer_name, type, fields_json, created_at, updated_at, deleted)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(r.id, r.owner_id, r.owner_name, r.name, r.purpose, r.issuer_id, r.issuer_name, r.type, r.fields_json, r.created_at, r.updated_at, r.deleted);
+  // Deleting a register deletes its visitor list, on every instance the deletion reaches.
+  if (r.deleted) {
+    db.prepare('DELETE FROM visits WHERE register_id = ?').run(r.id);
+    db.prepare('DELETE FROM register_denials WHERE register_id = ?').run(r.id);
+  }
+}
+
+const registerIsLive = (db: DatabaseSync, id: string) => Boolean(db.prepare('SELECT 1 FROM registers WHERE id = ? AND deleted = 0').get(id));
+
+// Union by id: the same visit arriving twice is stored once. A visit for a deleted register is dropped.
+export function saveVisit(db: DatabaseSync, v: VisitRow): void {
+  if (!registerIsLive(db, v.register_id)) return;
+  db.prepare(`INSERT OR IGNORE INTO visits (id, register_id, credential_id, issuer, key_id, status_index, type, fields_json, verified_at, instance)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.id, v.register_id, v.credential_id, v.issuer, v.key_id, v.status_index, v.type, v.fields_json, v.verified_at, v.instance);
+}
+
+export function saveDenial(db: DatabaseSync, d: DenialRow): void {
+  if (!registerIsLive(db, d.register_id)) return;
+  db.prepare('INSERT OR IGNORE INTO register_denials (id, register_id, code, at) VALUES (?, ?, ?, ?)').run(d.id, d.register_id, d.code, d.at);
+}
+
+// Visit rows are kept for a limited time only.
+export function purgeOldVisits(db: DatabaseSync, retentionDays: number): void {
+  const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString();
+  db.prepare('DELETE FROM visits WHERE verified_at < ?').run(cutoff);
+  db.prepare('DELETE FROM register_denials WHERE at < ?').run(cutoff);
 }
 
 // ---------- export and merge ----------
@@ -85,6 +115,8 @@ export function exportState(db: DatabaseSync): SharedState {
     statusBitsHex: getStatusBits(db),
     auditEvents: db.prepare('SELECT * FROM audit_events').all() as AuditEvent[],
     registers: db.prepare('SELECT * FROM registers').all() as RegisterRow[],
+    visits: db.prepare('SELECT * FROM visits').all() as VisitRow[],
+    denials: db.prepare('SELECT * FROM register_denials').all() as DenialRow[],
   };
 }
 
@@ -104,6 +136,8 @@ export function mergeState(db: DatabaseSync, incoming: SharedState): void {
     }
   }
   for (const register of incoming.registers ?? []) saveRegister(db, register);
+  for (const visit of incoming.visits ?? []) saveVisit(db, visit);
+  for (const denial of incoming.denials ?? []) saveDenial(db, denial);
   if (incoming.deleteLoadTest) deleteLoadTestRequests(db);
   if (incoming.statusBitsHex) saveStatusBits(db, orHex(getStatusBits(db), incoming.statusBitsHex));
   for (const event of incoming.auditEvents ?? []) addAuditEvent(db, event);

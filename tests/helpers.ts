@@ -119,7 +119,7 @@ export async function world(verifierOptions: InstanceOptions = {}) {
   }
 
   return {
-    core, coreDb, verifier, verifierDb, chainState, verifierRegistry, verifierKeys, getIssuerKey, fetchStub,
+    core, coreDb, verifier, verifierDb, sessionPublicJwk: created.sessionPublicJwk, chainState, verifierRegistry, verifierKeys, getIssuerKey, fetchStub,
     login, apiFor, offer, issueTo, present, refreshRevocations, getCredentials,
     advance: (seconds: number) => { time += seconds * 1000; },
     templates: TEMPLATES,

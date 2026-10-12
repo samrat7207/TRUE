@@ -302,7 +302,8 @@ export type PresentationRequest = {
   nonce: string;
   responseUri: string;
   // Present when the request comes from a person's register: who asks, and the ONE institution and ID type accepted.
-  register?: { id: string; name: string; owner: string; issuerId: string; issuerName: string; type: string };
+  // retentionDays: how long the owner's visitor list keeps what is shared.
+  register?: { id: string; name: string; owner: string; issuerId: string; issuerName: string; type: string; retentionDays?: number };
 };
 
 // What the registry says about a verifier.
