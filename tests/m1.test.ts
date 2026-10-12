@@ -15,7 +15,7 @@ import { openIssuerDb } from '../services/issuer-api/src/db.ts';
 import { createIssuerApp } from '../services/issuer-api/src/app.ts';
 import { openVerifierDb } from '../services/verifier-api/src/db.ts';
 import { createVerifierApp } from '../services/verifier-api/src/app.ts';
-import { isRevoked, refreshStatusList } from '../services/verifier-api/src/sync.ts';
+import { getStatusBits, refreshStatusList } from '../services/verifier-api/src/sync.ts';
 
 type App = { request: (path: string, init?: RequestInit) => Response | Promise<Response> };
 type Holder = Awaited<ReturnType<typeof generateHolderKey>>;
@@ -62,7 +62,7 @@ const stateOf = async (requestId: string) => (await verifier.request(`/v1/reques
 beforeAll(async () => {
   const keys = await generateSigningKeyPair();
   issuerDb = openIssuerDb(':memory:');
-  issuer = createIssuerApp(issuerDb, keys);
+  issuer = createIssuerApp(issuerDb, keys, undefined, { staffAuth: 'off' });
   // The verifier is given ONLY the issuer's public key (what the registry holds). It has no handle on the issuer app.
   verifierDb = openVerifierDb(':memory:');
   verifier = createVerifierApp(verifierDb, (id) => (id === ISSUER_ID ? { publicJwk: keys.publicJwk, state: 'Active' } : null));
@@ -146,7 +146,7 @@ describe('attacks', () => {
   it('tamper: a credential signed by a different key is rejected', async () => {
     // A forger with their own key signs a look-alike credential under the real issuer's name.
     const forgerKeys = await generateSigningKeyPair();
-    const forger = createIssuerApp(openIssuerDb(':memory:'), forgerKeys);
+    const forger = createIssuerApp(openIssuerDb(':memory:'), forgerKeys, undefined, { staffAuth: 'off' });
     const holder = await generateHolderKey();
     const { code } = await (await post(forger, '/v1/claim-codes', { studentId: 1 })).json();
     const offer = await (await forger.request(`/v1/claim-codes/${code}`)).json();
@@ -271,11 +271,12 @@ describe('issuer database is the gate', () => {
   });
 
   it('a revocation list that does not match the chain fingerprint is ignored', async () => {
+    const before = getStatusBits(verifierDb);
     const outcome = await refreshStatusList(verifierDb, {
       fetchList: async () => ({ bitsHex: 'ffff' }), getAnchorHash: async () => sha256Hex('00'), hash: sha256Hex,
     });
     expect(outcome).toBe('mismatch');
-    expect(isRevoked(verifierDb, 9)).toBe(false);
+    expect(getStatusBits(verifierDb)).toBe(before);
   });
 
   it('issuer stats count issued, active and revoked', async () => {

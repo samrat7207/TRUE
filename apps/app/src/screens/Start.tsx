@@ -1,6 +1,6 @@
 // First screen: the splash blob and the role choice. No email, password or third-party login.
 import { BRAND } from '@true/shared';
-import { Blob, Card, PillButton, Screen, TopBar, go } from '../ui.tsx';
+import { Blob, Card, Screen, go } from '../ui.tsx';
 
 export function RolePicker() {
   return (
@@ -49,18 +49,3 @@ function RoleIcon({ path, dark }: { path: string; dark?: boolean }) {
   );
 }
 
-// Issuer mode arrives in the next phase. Until then the existing issuer console keeps working.
-export function IssuerPlaceholder() {
-  return (
-    <Screen>
-      <TopBar back="/" title="Issuer" />
-      <Card>
-        <div className="text-lg font-semibold">Issuer mode: next phase</div>
-        <p className="mt-2 text-small text-muted">
-          This screen is a placeholder. Issuing, revoking and key management still work today in the existing issuer console.
-        </p>
-      </Card>
-      <div className="mt-4"><PillButton kind="secondary" onClick={() => go('/')}>Back</PillButton></div>
-    </Screen>
-  );
-}

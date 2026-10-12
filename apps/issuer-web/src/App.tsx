@@ -12,14 +12,51 @@ type Key = { kid: string; state: 'Active' | 'Retired' | 'Compromised'; createdAt
 const REASONS = ['left_institution', 'graduated', 'lost_device', 'issued_in_error', 'misconduct'];
 const REINSTATE_REASONS = ['revoked_in_error', 're_enrolled', 'device_replaced', 'appeal_accepted'];
 
+// The staff session token from the PIN sign-in. The issuer API checks it, and the staff member's role, on every call.
+let token = '';
+const headers = () => ({ 'content-type': 'application/json', authorization: `Bearer ${token}` });
+
 // POST JSON and return both the HTTP status and the parsed body.
 async function post(path: string, body: unknown = {}) {
-  const response = await fetch(URLS.issuerApi + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const response = await fetch(URLS.issuerApi + path, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
   return { ok: response.ok, body: await response.json() };
 }
-const get = (path: string) => fetch(URLS.issuerApi + path).then((r) => r.json());
+const get = (path: string) => fetch(URLS.issuerApi + path, { headers: headers() }).then((r) => r.json());
+
+// Staff PIN sign-in bar. Sign in as the admin to use every button on this page; other roles are limited by the server.
+function SignIn({ onSignedIn }: { onSignedIn: (who: string) => void }) {
+  const [staff, setStaff] = useState<{ id: string; name: string; role: string }[]>([]);
+  const [staffId, setStaffId] = useState('');
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => { fetch(URLS.issuerApi + '/v1/staff/directory').then((r) => r.json()).then((b) => { setStaff(b.staff); setStaffId(b.staff[0]?.id ?? ''); }); }, []);
+  async function signIn() {
+    const response = await fetch(URLS.issuerApi + '/v1/staff/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ staffId, pin }) });
+    const body = await response.json();
+    if (!response.ok) return setError(body.error.message);
+    token = body.token;
+    onSignedIn(`${body.staff.name} (${body.staff.role})`);
+  }
+  return (
+    <div className="mx-auto mt-24 max-w-sm space-y-3 rounded-xl bg-white p-6 shadow">
+      <h1 className="text-lg font-bold">Staff sign-in</h1>
+      <select value={staffId} onChange={(e) => setStaffId(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2">
+        {staff.map((s) => <option key={s.id} value={s.id}>{s.name} · {s.role}</option>)}
+      </select>
+      <input type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="PIN" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+      {error && <p className="text-sm text-rose-700">{error}</p>}
+      <button onClick={signIn} className="w-full rounded-lg bg-indigo-600 py-2 text-white">Sign in</button>
+      <p className="text-xs text-slate-500">Demo PINs are in the .env file (STAFF_PIN_ADMIN and so on).</p>
+    </div>
+  );
+}
 
 export default function App() {
+  const [who, setWho] = useState('');
+  return who ? <Console who={who} /> : <SignIn onSignedIn={setWho} />;
+}
+
+function Console({ who }: { who: string }) {
   const [students, setStudents] = useState<Student[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [keys, setKeys] = useState<Key[]>([]);
@@ -78,7 +115,7 @@ export default function App() {
           <div className="text-xs uppercase tracking-wide text-slate-500">{BRAND.name} · Issuer console</div>
           <h1 className="text-2xl font-bold">{ISSUER_NAME}</h1>
         </div>
-        <div className="text-right text-xs text-slate-500">{BRAND.fullForm}<br />All student data on this page is fake demo data.</div>
+        <div className="text-right text-xs text-slate-500">{BRAND.fullForm}<br />Signed in: {who}<br />All student data on this page is fake demo data.</div>
       </header>
 
       {stats && (

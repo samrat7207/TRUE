@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { ALL_CLAIMS, CLAIM_LABELS } from '@true/shared';
 import type { RequestCheck } from '@true/credentials';
-import { answerRequest, loadRequest, pickCredential, recordBlocked, type Answer } from '@true/wallet-core';
+import { answerRequest, loadRequest, pickCredential, pickCredentialFor, recordBlocked, type Answer } from '@true/wallet-core';
 import { Avatar, Badge, Card, ConsentRow, Field, Orb, PillButton, Screen, StepList, TopBar, go, type StepItem } from '../ui.tsx';
 import { CLAIM_HELP, STEP_LABELS, browserFetch, displayValue, registry, useCards } from '../wallet.ts';
 
@@ -32,7 +32,9 @@ export function Present({ requestUri }: { requestUri: string }) {
     return () => clearTimeout(timer);
   }, [answer, revealed, showResult]);
 
-  const card = cards ? pickCredential(cards.map((c) => ({ ...c, addedAt: c.stored.addedAt }))) : undefined;
+  // The card that can answer this request; if none has every requested item, fall back to the newest card.
+  const dated = (cards ?? []).map((c) => ({ ...c, addedAt: c.stored.addedAt }));
+  const card = (check?.status === 'verified' ? pickCredentialFor(dated, check.request.claims) : undefined) ?? pickCredential(dated);
 
   async function respond(approve: boolean) {
     if (!check || check.status !== 'verified' || !card) return;

@@ -26,7 +26,7 @@ describe('fresh start, end to end', () => {
       anchorStatusList: async (hash) => { anchorHash = hash; },
     };
     const firstKey = await generateSigningKeyPair();
-    const issuer = createIssuerApp(openIssuerDb(':memory:'), firstKey, chain);
+    const issuer = createIssuerApp(openIssuerDb(':memory:'), firstKey, chain, { staffAuth: 'off' });
     await chain.addIssuerKey('key-1', firstKey.publicJwk);
     const verifierDb = openVerifierDb(':memory:');
     const verifier = createVerifierApp(verifierDb, (id, keyId) => (id === ISSUER_ID ? registry.get(keyId) ?? null : null));

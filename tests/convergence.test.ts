@@ -25,7 +25,7 @@ let oneAlive: boolean;
 
 beforeEach(async () => {
   const keys = await generateSigningKeyPair();
-  issuer = createIssuerApp(openIssuerDb(':memory:'), keys);
+  issuer = createIssuerApp(openIssuerDb(':memory:'), keys, undefined, { staffAuth: 'off' });
   const lookup = (id: string) => (id === ISSUER_ID ? { publicJwk: keys.publicJwk, state: 'Active' } : null);
   dbOne = openVerifierDb(':memory:');
   dbTwo = openVerifierDb(':memory:');
@@ -119,7 +119,7 @@ describe('two verifier instances', () => {
 
   it('three instances: create on 1, kill 1 and 2, approve through 3 is verified', async () => {
     const keys = await generateSigningKeyPair();
-    const localIssuer = createIssuerApp(openIssuerDb(':memory:'), keys);
+    const localIssuer = createIssuerApp(openIssuerDb(':memory:'), keys, undefined, { staffAuth: 'off' });
     const lookup = (id: string) => (id === ISSUER_ID ? { publicJwk: keys.publicJwk, state: 'Active' } : null);
     const apps: App[] = [];
     const alive = [true, true, true];

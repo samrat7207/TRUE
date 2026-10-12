@@ -75,6 +75,12 @@ export async function markRevoked(id: string): Promise<void> {
   await set('credentials', (await getCredentials()).map((c) => (c.id === id ? { ...c, revoked: true } : c)));
 }
 
+// Which card answers THIS request: the newest card that holds every claim the verifier asks for.
+// (A Library Card cannot answer "are you over 18?", so the Student ID is used for that.)
+export function pickCredentialFor<T extends { addedAt: string; claims: Record<string, unknown> }>(cards: T[], requested: string[]): T | undefined {
+  return pickCredential(cards.filter((card) => requested.every((claim) => claim in card.claims)));
+}
+
 export async function removeCredential(id: string): Promise<void> {
   await set('credentials', (await getCredentials()).filter((c) => c.id !== id));
 }

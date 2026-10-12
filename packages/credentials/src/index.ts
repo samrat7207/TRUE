@@ -106,7 +106,9 @@ export async function issueCredential(input: {
   statusListUrl: string;
   type: string;
   claims: Record<string, unknown>;
-  validDays: number;
+  // When it stops being valid: either a number of days from now, or an exact time (seconds since 1970).
+  validDays?: number;
+  expiresAt?: number;
 }): Promise<string> {
   const sdjwt = new SDJwtVcInstance({
     ...COMMON,
@@ -118,7 +120,7 @@ export async function issueCredential(input: {
     {
       iss: input.issuerId,
       iat: now,
-      exp: now + input.validDays * 24 * 60 * 60,
+      exp: input.expiresAt ?? now + (input.validDays ?? 365) * 24 * 60 * 60,
       vct: input.type,
       cnf: { jwk: input.holderPublicJwk }, // binds the credential to the holder's key
       // Always visible to the verifier: where to find the revocation bit for this credential.

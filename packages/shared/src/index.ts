@@ -11,6 +11,7 @@ export const URLS = {
   wallet: 'http://localhost:5173',
   issuerWeb: 'http://localhost:5174',
   verifierWeb: 'http://localhost:5175',
+  app: 'http://localhost:5176', // the new mobile-first app
 };
 
 export const ISSUER_ID = 'issuer:astra-institute';
@@ -20,7 +21,7 @@ export const CREDENTIAL_TYPE = 'StudentCredential';
 // Raw claims are copied from the issuer's student row.
 export const RAW_CLAIMS = ['name', 'pnr', 'dob', 'address', 'class', 'section', 'branch', 'photo', 'institution'];
 // Derived claims are yes/no facts the issuer computes, so a verifier never needs the raw data behind them.
-export const DERIVED_CLAIMS = ['is_student', 'age_over_18'];
+export const DERIVED_CLAIMS = ['is_student', 'age_over_18', 'library_member'];
 export const ALL_CLAIMS = [...RAW_CLAIMS, ...DERIVED_CLAIMS];
 
 // Human-readable names for the consent screen.
@@ -36,6 +37,7 @@ export const CLAIM_LABELS: Record<string, string> = {
   institution: 'Institution',
   is_student: 'Is a current student',
   age_over_18: 'Is over 18',
+  library_member: 'Is a library member',
 };
 
 // One JSON error shape for every API.
@@ -49,3 +51,8 @@ export const STATUS_LIST_URL = URLS.issuerApi + '/v1/status-list';
 export const CHAIN_RPC_URL = 'http://localhost:8545';
 
 export { runLoadTest, LOAD_TEST_VERIFIER_ID, type LoadTestStats } from './loadtest.ts';
+
+export { createFailureLimiter, createRateCounter } from './ratelimit.ts';
+
+// Credential types the issuer can issue, with the name shown to people.
+export const CREDENTIAL_TYPES: Record<string, string> = { StudentCredential: 'Student ID', LibraryCard: 'Library Card' };

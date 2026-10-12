@@ -1,7 +1,7 @@
 // Glue between the screens and the real wallet logic (packages/wallet-core, packages/credentials).
 // Nothing here is mock data: every value shown comes from the stored credential, the registry or a verifier.
 import { useCallback, useEffect, useState } from 'react';
-import { URLS } from '@true/shared';
+import { CREDENTIAL_TYPES, URLS } from '@true/shared';
 import { inspectCredential, readCredential, type CardCheck } from '@true/credentials';
 import { createRegistryReader } from '@true/registry';
 import { getCredentials, getSettings, type Fetch, type StoredCredential } from '@true/wallet-core';
@@ -18,7 +18,7 @@ export const issuerApiAddress = async () => (await getSettings()).issuerApi || U
 
 // ---------- words shown to the user ----------
 
-export const TYPE_LABELS: Record<string, string> = { StudentCredential: 'Student ID' };
+export const TYPE_LABELS: Record<string, string> = CREDENTIAL_TYPES;
 
 // What sharing each claim means, in plain words (consent screen).
 export const CLAIM_HELP: Record<string, string> = {
@@ -33,6 +33,7 @@ export const CLAIM_HELP: Record<string, string> = {
   institution: 'The institution you study at',
   is_student: 'Proves you are a current student, nothing else',
   age_over_18: 'Proves you are 18 or older, without your date of birth',
+  library_member: 'Proves you are a library member',
 };
 
 // The verifier's check names, in plain words (Verifying screen).

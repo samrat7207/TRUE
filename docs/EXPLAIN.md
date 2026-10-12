@@ -258,3 +258,37 @@ The verifier's reply now carries `steps`: seven named checks, each `pass`, `fail
 - Camera scanning uses the browser's built-in QR reader, which Chrome on Windows does not have. There the Scan tab says so and offers the paste box.
 - "Share specific info" on a credential opens the Scan tab: a proof always answers a verifier's request, so there is nothing to share without one.
 - Issuer mode is a placeholder. Requests tab is hidden. Discover has one "not available" card.
+
+
+---
+
+## UI overhaul, phase 2A: issuer mode and staff permissions
+
+### Staff and roles (enforced by the server)
+| Role | May do | May not do |
+|---|---|---|
+| admin | everything: issue, revoke, keys, staff | deactivate their own account |
+| issuer | create offers / issue | revoke, keys, staff |
+| revoker | revoke, give back | issue, keys, staff |
+| auditor | read every screen | change anything |
+
+- Each route in `services/issuer-api/src/app.ts` is wrapped in `staff()` (any signed-in staff) or `staff('issue' | 'revoke' | 'keys' | 'staff')`. The check runs on the server for every call, so hiding a button in the app is only tidiness.
+- **PIN sign-in:** pick a staff member, enter the PIN, get a session token that lasts 30 minutes. Five wrong PINs lock that staff id for a minute (HTTP 429).
+- **PIN storage:** only `salt:hash` from Node's built-in scrypt, with a different random salt per person, compared in constant time (`pin.ts`). This is the one place outside `packages/credentials` that touches crypto, because it must run on the server only.
+- **Demo PINs** come from `.env` (`STAFF_PIN_ADMIN` etc.). If one is missing a random 6-digit PIN is generated and written to `.env`. They are used only when the staff table is first created.
+- Deactivating a staff member takes effect on their very next request, even with an open session.
+- Honest limits: sessions are kept in the server's memory (a restart signs everyone out); the staff directory (names and roles) is public so the PIN screen can list it; the session token sits in the browser tab's sessionStorage.
+
+### The registry
+A new `credentials` table has one row per offer: id (`TR-SID-0001`, `TR-LIB-0002`), type, validity dates, who issued it, and a status.
+- **pending** = claim code created, not collected. **active** = collected. **revoked**. **replaced** = the student collected a newer one of the same type. A pending offer whose 10-minute code ran out shows as "Offer expired".
+- Every collected credential now gets its **own** position in the revocation list, so one credential can be revoked without touching the student's others.
+- Two types: **Student ID** and **Library Card** (name, PNR, photo, institution, library_member). The wallet keeps both side by side and answers a request with the newest card that holds every requested item.
+- Revoking from the new console revokes that credential (and older copies it replaced); the student stays eligible. The old console's student-level Revoke / Give back still works.
+
+### Audit log
+`audit_events` stores time, type, **staff id** and the id of the thing acted on. Never a name. The console joins names on screen from the registry it already loaded.
+The "Verify" chip in the activity log is deliberately empty and says why: verifiers never contact the issuer, so the issuer cannot see where a credential is shown.
+
+### Screens (all numbers computed from the database on each load)
+Staff PIN → Dashboard (issued / active / pending / revoked, recent activity) → Search (name, PNR or id) → Issue (type, valid from/till, department and batch read from the student record) → offer QR and link → Credential detail → Revoke (reason → confirm) → Registry with filter chips → Activity log → Signing keys → Reports (30 days: counts, trend line, type split) → Staff.

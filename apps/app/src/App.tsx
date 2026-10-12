@@ -1,7 +1,8 @@
 // The app shell: picks the screen from the address after '#'.
-// Phase 1 has the role picker and General (holder) mode. Issuer mode is a placeholder until the next phase.
+// The role picker leads to General (holder) mode or to the issuer console.
 import { useEffect, useState } from 'react';
-import { RolePicker, IssuerPlaceholder } from './screens/Start.tsx';
+import { RolePicker } from './screens/Start.tsx';
+import { IssuerApp } from './issuer/Issuer.tsx';
 import { Home, CredentialDetail, Claim } from './screens/Home.tsx';
 import { Scan } from './screens/Scan.tsx';
 import { Present } from './screens/Present.tsx';
@@ -34,7 +35,8 @@ export default function App() {
     case '/activity': return <Activity />;
     case '/discover': return <Discover />;
     case '/profile': return <Profile />;
-    case '/issuer': return <IssuerPlaceholder />;
-    default: return <RolePicker />;
+    default:
+      // Everything under /issuer is the issuer console (staff PIN first).
+      return path.startsWith('/issuer') ? <IssuerApp path={path} params={params} /> : <RolePicker />;
   }
 }

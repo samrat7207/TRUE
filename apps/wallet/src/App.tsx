@@ -1,10 +1,10 @@
 // Wallet: holds credentials, shows the consent screen, and sends only the approved claims.
 import { useEffect, useState } from 'react';
-import { BRAND, CLAIM_LABELS, ALL_CLAIMS, URLS } from '@true/shared';
+import { BRAND, CLAIM_LABELS, ALL_CLAIMS, CREDENTIAL_TYPES, URLS } from '@true/shared';
 import { authenticateRequest, createHolderProof, createPresentation, readCredential, type RequestCheck } from '@true/credentials';
 import { createRegistryReader } from '@true/registry';
 import {
-  addCredential, addHistory, getCredentials, getHistory, getHolderKey, markRevoked, pickCredential, removeCredential,
+  addCredential, addHistory, getCredentials, getHistory, getHolderKey, markRevoked, pickCredential, pickCredentialFor, removeCredential,
   type HistoryEntry, type StoredCredential,
 } from './storage.ts';
 
@@ -113,13 +113,13 @@ function Card({ stored, onRemove }: { stored: StoredCredential; onRemove: () => 
         <div className="min-w-0">
           <div className="truncate text-lg font-semibold">{String(claims.name)}</div>
           <div className="truncate text-xs opacity-80">{stored.issuerName}</div>
-          <div className="text-xs opacity-80">Student credential · added {new Date(stored.addedAt).toLocaleString()}</div>
+          <div className="text-xs opacity-80">{CREDENTIAL_TYPES[String(claims.vct)] ?? 'Credential'} · added {new Date(stored.addedAt).toLocaleString()}</div>
         </div>
       </div>
       <button onClick={() => setOpen(!open)} className="mt-3 text-xs underline opacity-90">{open ? 'Hide' : 'Show'} everything inside this card</button>
       {open && (
         <div className="mt-2 space-y-1 rounded-lg bg-white/10 p-3 text-xs">
-          {ALL_CLAIMS.filter((name) => name !== 'photo').map((name) => (
+          {ALL_CLAIMS.filter((name) => name !== 'photo' && name in claims).map((name) => (
             <div key={name} className="flex justify-between gap-3">
               <span className="opacity-70">{CLAIM_LABELS[name]}</span>
               <span className="text-right">{String(claims[name])}</span>
@@ -277,7 +277,7 @@ function Present({ requestUri }: { requestUri: string }) {
 
   const request = check.request;
   const overAsking = check.extraClaims.length > 0;
-  const hidden = ALL_CLAIMS.filter((name) => !request.claims.includes(name));
+  const hidden = ALL_CLAIMS.filter((name) => !request.claims.includes(name) && name in claims);
   return (
     <div className="space-y-4">
       <div className="rounded-xl bg-white p-4">

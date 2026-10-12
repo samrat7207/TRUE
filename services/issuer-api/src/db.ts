@@ -27,6 +27,46 @@ export type ClaimCode = {
   used_at: string | null;
 };
 
+export type StaffRole = 'admin' | 'issuer' | 'revoker' | 'auditor';
+export type StaffRow = { id: string; name: string; role: StaffRole; pin_hash: string; active: number; created_at: string };
+
+// One row per credential the issuer has offered. This is the issuer's registry.
+// status: pending = claim code created, not collected yet; active = collected; revoked = cancelled;
+// replaced = the same student collected a newer one of the same type.
+export type CredentialRow = {
+  id: string; // e.g. TR-SID-0007
+  student_id: number;
+  type: string; // StudentCredential | LibraryCard
+  status: 'pending' | 'active' | 'revoked' | 'replaced';
+  claim_code: string;
+  valid_from: string;
+  valid_till: string;
+  issued_by: string | null; // staff id
+  created_at: string;
+  claimed_at: string | null;
+  status_list_index: number | null;
+  revoked_reason: string | null;
+  revoked_at: string | null;
+  revoked_by: string | null;
+};
+
+// What happened, by whom. Identifiers only: staff id and a credential / key / request id. Never a name.
+export type AuditRow = { id: number; ts: string; type: string; staff_id: string | null; subject: string };
+
+// A holder asking for a credential from their phone (Requests tab).
+export type CredentialRequestRow = {
+  id: string; // long random id, known only to the holder's app
+  type: string;
+  pnr: string;
+  student_id: number | null; // set if the PNR exists
+  dob_matches: number; // 1 if the date of birth typed by the holder equals our record. The typed date is not stored.
+  status: 'pending' | 'approved' | 'rejected';
+  claim_code: string | null;
+  created_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+};
+
 export type IssuerKeyRow = { kid: string; public_jwk: string; private_jwk: string; state: 'Active' | 'Retired' | 'Compromised'; created_at: string };
 
 const SCHEMA = `
@@ -68,6 +108,53 @@ CREATE TABLE IF NOT EXISTS status_list (
   version INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO status_list (id, bits_hex, version) VALUES (1, '', 0);
+-- Staff who may use the issuer console. The PIN is stored only as a salted scrypt hash.
+CREATE TABLE IF NOT EXISTS staff (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL,
+  pin_hash TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+-- The issuer's registry of credentials (see CredentialRow).
+CREATE TABLE IF NOT EXISTS credentials (
+  id TEXT PRIMARY KEY,
+  student_id INTEGER NOT NULL REFERENCES students(id),
+  type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  claim_code TEXT NOT NULL UNIQUE,
+  valid_from TEXT NOT NULL,
+  valid_till TEXT NOT NULL,
+  issued_by TEXT,
+  created_at TEXT NOT NULL,
+  claimed_at TEXT,
+  status_list_index INTEGER UNIQUE,
+  revoked_reason TEXT,
+  revoked_at TEXT,
+  revoked_by TEXT
+);
+-- Audit log: identifiers only, never names.
+CREATE TABLE IF NOT EXISTS audit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  type TEXT NOT NULL,
+  staff_id TEXT,
+  subject TEXT NOT NULL
+);
+-- Requests sent by holders from their phone.
+CREATE TABLE IF NOT EXISTS credential_requests (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  pnr TEXT NOT NULL,
+  student_id INTEGER,
+  dob_matches INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  claim_code TEXT,
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by TEXT
+);
 -- List positions that belonged to a revoked credential. They are never handed out again,
 -- because a revoked bit can never be turned back to 0.
 CREATE TABLE IF NOT EXISTS retired_indexes (

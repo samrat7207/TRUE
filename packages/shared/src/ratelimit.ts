@@ -1,4 +1,4 @@
-// Two small in-memory limiters used by the front door. No library: each is a Map and some arithmetic.
+// Two small in-memory limiters, used by the verifier front door and by the issuer's PIN sign-in. No library: each is a Map and some arithmetic.
 // "now" is passed in so tests can move the clock instead of waiting.
 
 type Clock = () => number; // milliseconds

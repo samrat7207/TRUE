@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { ISSUER_ID } from '@true/shared';
 import { generateSigningKeyPair, inspectCredential, type IssuerKeyInfo, type Jwk, type VerifierInfo } from '@true/credentials';
 import {
-  answerRequest, claimCredential, getCredentials, getHistory, getSettings, loadRequest, parseScanned, pickCredential,
+  answerRequest, claimCredential, getCredentials, getHistory, getSettings, loadRequest, parseScanned, pickCredential, pickCredentialFor,
   resetWallet, saveSettings, useMemoryStorage, type Fetch,
 } from '@true/wallet-core';
 import { openIssuerDb } from '../services/issuer-api/src/db.ts';
@@ -35,7 +35,7 @@ beforeAll(async () => {
   };
   const firstKey = await generateSigningKeyPair();
   issuerKeys.set('key-1', { publicJwk: firstKey.publicJwk, state: 'Active' });
-  issuer = createIssuerApp(openIssuerDb(':memory:'), firstKey, chain);
+  issuer = createIssuerApp(openIssuerDb(':memory:'), firstKey, chain, { staffAuth: 'off' });
 
   const privateKeys: Record<string, Jwk> = {};
   for (const v of DEMO_VERIFIERS) {
@@ -72,6 +72,16 @@ describe('reading what was scanned', () => {
     expect(parseScanned('  abcd2345 ')).toEqual({ kind: 'claim', code: 'ABCD2345' });
     expect(parseScanned('hello')).toEqual({ kind: 'unknown' });
     expect(parseScanned('https://example.com')).toEqual({ kind: 'unknown' });
+  });
+});
+
+describe('choosing the card for a request', () => {
+  const studentId = { addedAt: '2026-10-01T00:00:00Z', claims: { name: 'A', pnr: 'P1', age_over_18: true, is_student: true } };
+  const libraryCard = { addedAt: '2026-10-05T00:00:00Z', claims: { name: 'A', pnr: 'P1', library_member: true } };
+  it('uses the newest card that holds every requested claim', () => {
+    expect(pickCredentialFor([studentId, libraryCard], ['name', 'pnr'])).toBe(libraryCard); // both can; newest wins
+    expect(pickCredentialFor([studentId, libraryCard], ['age_over_18'])).toBe(studentId); // only the Student ID can
+    expect(pickCredentialFor([studentId, libraryCard], ['address'])).toBeUndefined(); // nobody can
   });
 });
 

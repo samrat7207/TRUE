@@ -21,7 +21,7 @@ async function setup() {
   };
   const firstKey = await generateSigningKeyPair();
   registry.set('key-1', { publicJwk: firstKey.publicJwk, state: 'Active' });
-  const issuer = createIssuerApp(openIssuerDb(':memory:'), firstKey, chain);
+  const issuer = createIssuerApp(openIssuerDb(':memory:'), firstKey, chain, { staffAuth: 'off' });
   const verifier = createVerifierApp(openVerifierDb(':memory:'), (id, keyId) => (id === ISSUER_ID ? registry.get(keyId) ?? null : null));
 
   async function issue(studentId: number) {

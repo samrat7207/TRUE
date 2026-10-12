@@ -4,7 +4,7 @@
 import { Hono, type Context } from 'hono';
 import { LOAD_TEST_VERIFIER_ID } from '@true/shared';
 import { cors } from 'hono/cors';
-import { createFailureLimiter, createRateCounter } from './ratelimit.ts';
+import { createFailureLimiter, createRateCounter } from '@true/shared';
 
 // One verifier instance as the front door sees it.
 export type Backend = {

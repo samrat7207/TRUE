@@ -1,9 +1,10 @@
 // Starts the issuer API on port 4001.
-import { mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { ISSUER_ID } from '@true/shared';
 import { generateSigningKeyPair } from '@true/credentials';
+import type { StaffRole } from './db.ts';
 import { createRegistryReader, createRegistryWriter, type ChainConfig } from '@true/registry';
 import { openIssuerDb, type IssuerKeyRow } from './db.ts';
 import { createIssuerApp, statusListHash, type IssuerChain } from './app.ts';
@@ -26,8 +27,30 @@ const chain: IssuerChain = {
   anchorStatusList: (hashHex, version) => writer.anchorStatusList(ISSUER_ID, hashHex, version),
 };
 
+// The four demo staff. Their PINs come from .env (STAFF_PIN_ADMIN and so on) and are never in the code.
+// If a PIN is missing we make a random 6-digit one and append it to .env, so the demo still starts
+// and you can read the PIN there. Used only when the staff table is empty.
+const ENV_FILE = fileURLToPath(new URL('../../../.env', import.meta.url));
+if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
+const DEMO_STAFF: { id: string; name: string; role: StaffRole }[] = [
+  { id: 'S-001', name: 'Priya Nair', role: 'admin' },
+  { id: 'S-002', name: 'Arjun Rao', role: 'issuer' },
+  { id: 'S-003', name: 'Kavya Menon', role: 'revoker' },
+  { id: 'S-004', name: 'Rahul Iyer', role: 'auditor' },
+];
+const seedStaff = DEMO_STAFF.map((person) => {
+  const variable = `STAFF_PIN_${person.role.toUpperCase()}`;
+  let pin = process.env[variable];
+  if (!pin) {
+    pin = String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000));
+    appendFileSync(ENV_FILE, `\n${variable}=${pin}`);
+    console.log(`No ${variable} in .env: a random demo PIN was written there`);
+  }
+  return { ...person, pin };
+});
+
 // A first key is only used if the database has none yet.
-const app = createIssuerApp(db, await generateSigningKeyPair(), chain);
+const app = createIssuerApp(db, await generateSigningKeyPair(), chain, { seedStaff });
 
 // The local chain starts empty on every run, but our database persists. So on start-up we publish
 // whatever the chain is missing: every public key with its state, and the revocation list fingerprint.

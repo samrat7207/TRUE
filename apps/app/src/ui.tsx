@@ -31,18 +31,28 @@ export function TopBar({ title, back, right }: { title?: string; back?: string; 
   );
 }
 
-const TABS = [
+export type Tab = { path: string; label: string; icon: string };
+
+export const HOLDER_TABS: Tab[] = [
   { path: '/home', label: 'Home', icon: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
   { path: '/scan', label: 'Scan', icon: 'M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 8h3v3H8zM13 13h3v3h-3z' },
   { path: '/activity', label: 'Activity', icon: 'M12 7v5l3 2M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9z' },
   { path: '/discover', label: 'Discover', icon: 'M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9zM15.5 8.5l-2 5-5 2 2-5z' },
 ];
 
-// Fixed bar at the bottom with the four main places.
-export function BottomTabs({ active }: { active: string }) {
+export const ISSUER_TABS: Tab[] = [
+  { path: '/issuer/home', label: 'Home', icon: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
+  { path: '/issuer/search', label: 'Search', icon: 'M11 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8zM21 21l-4.3-4.3' },
+  { path: '/issuer/registry', label: 'Registry', icon: 'M4 6h16M4 12h16M4 18h10' },
+  { path: '/issuer/reports', label: 'Reports', icon: 'M4 20V10M10 20V4M16 20v-7M22 20H2' },
+  { path: '/issuer/more', label: 'More', icon: 'M5 12h.01M12 12h.01M19 12h.01' },
+];
+
+// Fixed bar at the bottom with the main places.
+export function BottomTabs({ active, tabs = HOLDER_TABS }: { active: string; tabs?: Tab[] }) {
   return (
     <nav className="fixed bottom-0 left-1/2 flex w-full max-w-[390px] -translate-x-1/2 justify-around border-t border-line bg-surface/95 px-2 pb-3 pt-2 backdrop-blur">
-      {TABS.map((tab) => (
+      {tabs.map((tab) => (
         <button key={tab.path} onClick={() => go(tab.path)} className={`flex w-16 flex-col items-center gap-1 text-tiny ${active === tab.path ? 'font-semibold text-ink' : 'text-muted'}`}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active === tab.path ? 2.2 : 1.6} strokeLinecap="round" strokeLinejoin="round"><path d={tab.icon} /></svg>
           {tab.label}
@@ -82,6 +92,19 @@ export function PillButton({ children, onClick, kind = 'primary', disabled }: {
     <button onClick={onClick} disabled={disabled} className={`h-13 w-full rounded-pill px-5 py-3.5 font-semibold transition disabled:opacity-35 ${kinds[kind]}`}>
       {children}
     </button>
+  );
+}
+
+// A row of filter chips; the chosen one is black.
+export function Chips<T extends string>({ options, value, onChange }: { options: Record<T, string>; value: T; onChange: (value: T) => void }) {
+  return (
+    <div className="mb-4 flex gap-2 overflow-x-auto">
+      {(Object.keys(options) as T[]).map((key) => (
+        <button key={key} onClick={() => onChange(key)} className={`shrink-0 rounded-pill px-4 py-1.5 text-small font-medium ${value === key ? 'bg-ink text-white' : 'border border-line bg-surface text-muted'}`}>
+          {options[key]}
+        </button>
+      ))}
+    </div>
   );
 }
 

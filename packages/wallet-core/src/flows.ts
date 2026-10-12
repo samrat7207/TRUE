@@ -52,11 +52,12 @@ export async function claimCredential(input: { code: string; issuerApi: string; 
   const response = await input.fetch(`${input.issuerApi}/v1/credentials`, postJson({ code, proof }));
   const result = await response.json();
   if (!response.ok) throw new Error(result.error.message);
-  // A re-issued credential replaces any older card for the same student,
-  // so a stale card can never be presented by mistake.
+  // A re-issued credential replaces any older card of the SAME TYPE for the same student,
+  // so a stale card can never be presented by mistake. A Student ID and a Library Card sit side by side.
   const fresh = await readCredential(result.credential);
   for (const old of await getCredentials()) {
-    if ((await readCredential(old.credential)).pnr === fresh.pnr) await removeCredential(old.id);
+    const claims = await readCredential(old.credential);
+    if (claims.pnr === fresh.pnr && claims.vct === fresh.vct) await removeCredential(old.id);
   }
   await addCredential(result.credential, result.issuerName);
   return (await getCredentials()).at(-1)!;
