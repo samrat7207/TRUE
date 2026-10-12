@@ -4,10 +4,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { randomToken } from '@true/credentials';
+import { URLS } from '@true/shared';
 
 // The internal key comes from .env. If there is no .env we make a random one for this run,
 // so "npm run dev" still works on a fresh checkout.
@@ -59,8 +60,22 @@ async function checkHealth() {
 setInterval(checkHealth, 2000);
 
 const app = new Hono();
+const requireApiKey: MiddlewareHandler = async (c, next) => {
+  if (PARTNER_API_KEY && c.req.header('x-api-key') !== PARTNER_API_KEY) {
+    return c.json({ error: { code: 'invalid_api_key', message: 'Missing or wrong X-API-Key header' } }, 401);
+  }
+  await next();
+};
 // exposeHeaders lets the browser page read X-Served-By.
-app.use('*', cors({ origin: '*', exposeHeaders: ['X-Served-By'] }));
+// CORS: our own two web apps plus the partner's origin(s) from .env (PARTNER_ORIGIN, comma separated).
+const PARTNER_API_KEY = process.env.PARTNER_API_KEY || undefined;
+const ALLOWED_ORIGINS = [URLS.wallet, URLS.verifierWeb, ...(process.env.PARTNER_ORIGIN ?? '').split(',').filter(Boolean)];
+app.use('*', cors({ origin: ALLOWED_ORIGINS, allowHeaders: ['content-type', 'x-api-key'], exposeHeaders: ['X-Served-By'] }));
+if (!PARTNER_API_KEY) console.log('WARNING: PARTNER_API_KEY is not set in .env, so the X-API-Key check is OFF');
+
+// Stopping and starting instances needs the API key too.
+app.use('/proxy/kill/*', requireApiKey);
+app.use('/proxy/restart/*', requireApiKey);
 
 // Status cards for the verifier screen.
 app.get('/proxy/status', (c) =>
@@ -87,7 +102,8 @@ app.all('*', async (c) => {
     try {
       const response = await fetch(urlOf(instance) + url.pathname + url.search, {
         method: c.req.method,
-        headers: { 'content-type': c.req.header('content-type') ?? 'application/json' },
+        // Pass the partner's API key through; the instance checks it.
+        headers: { 'content-type': c.req.header('content-type') ?? 'application/json', 'x-api-key': c.req.header('x-api-key') ?? '' },
         body,
         signal: AbortSignal.timeout(5000),
       });

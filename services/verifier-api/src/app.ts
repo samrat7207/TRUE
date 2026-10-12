@@ -1,7 +1,7 @@
 // Verifier API routes.
 // Hard rule: nothing in this file calls the issuer's API or database. A presentation is checked using
 // only its own signatures and the issuer's public key from the registry.
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
@@ -24,12 +24,25 @@ export type InstanceOptions = {
   instance?: string; // name shown in the status panel, e.g. "1"
   internalKey?: string; // secret both instances know; protects /internal/*
   sendToPeer?: (state: SharedState) => Promise<unknown>; // delivers changes to the other instances
+  apiKey?: string; // partner API key (X-API-Key). If not set, the check is off (tests, first run)
+  allowedOrigins?: string[]; // browser origins allowed by CORS. If not set, any origin
   syncedAtStart?: boolean; // true if this instance pulled the full state from a peer when it started
 };
 
 export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKeyLookup, options: InstanceOptions = {}) {
   const app = new Hono();
-  app.use('*', cors());
+  // CORS: which web pages may call this API from a browser. Our own apps plus the partner's origin.
+  app.use('*', cors({ origin: options.allowedOrigins ?? '*', allowHeaders: ['content-type', 'x-api-key'], exposeHeaders: ['X-Served-By'] }));
+
+  // Partner endpoints need the API key in the X-API-Key header.
+  // The two wallet endpoints (/object and /response) do not: a wallet has no partner key,
+  // and it can only reach a request if it was given that request's unguessable id.
+  const requireApiKey: MiddlewareHandler = async (c, next) => {
+    if (options.apiKey && c.req.header('x-api-key') !== options.apiKey) {
+      return c.json(refuse('invalid_api_key', 'Missing or wrong X-API-Key header'), 401);
+    }
+    await next();
+  };
   const instance = options.instance ?? '1';
   let lastSyncedAt: number | null = options.syncedAtStart ? Date.now() : null;
 
@@ -95,10 +108,10 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
 
   app.get('/v1/status/:index', (c) => c.json({ index: Number(c.req.param('index')), revoked: isRevoked(db, Number(c.req.param('index'))) }));
 
-  app.get('/v1/audit/events', (c) => c.json({ events: db.prepare('SELECT * FROM audit_events ORDER BY ts').all() }));
+  app.get('/v1/audit/events', requireApiKey, (c) => c.json({ events: db.prepare('SELECT * FROM audit_events ORDER BY ts').all() }));
 
   // The verifier screen lists who it can act as (three demo verifiers).
-  app.get('/v1/verifiers', (c) => {
+  app.get('/v1/verifiers', requireApiKey, (c) => {
     const rows = db.prepare('SELECT * FROM verifiers ORDER BY name').all() as VerifierRow[];
     return c.json({
       verifiers: rows.map((v) => ({ id: v.id, name: v.name, purpose: v.purpose, claims: JSON.parse(v.allowed_claims_json) })),
@@ -106,7 +119,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
   });
 
   // Create a presentation request: which claims, plus a fresh one-time nonce.
-  app.post('/v1/requests', async (c) => {
+  app.post('/v1/requests', requireApiKey, async (c) => {
     const body = z.object({ verifierId: z.string() }).safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(refuse('bad_request', 'verifierId is required'), 400);
     const verifier = getVerifier(body.data.verifierId);
@@ -193,7 +206,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
   });
 
   // Verifier screen polls this once a second to update live.
-  app.get('/v1/requests/:id', (c) => {
+  app.get('/v1/requests/:id', requireApiKey, (c) => {
     const request = getRequest(c.req.param('id'));
     if (!request) return c.json(refuse('unknown_request', 'No such request'), 404);
     const expired = request.state === 'pending' && new Date(request.expires_at) < new Date();
@@ -206,7 +219,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
   });
 
   // Stateless check for partner back ends (Convergence Round): they supply their own nonce and audience.
-  app.post('/v1/verify', async (c) => {
+  app.post('/v1/verify', requireApiKey, async (c) => {
     const body = z
       .object({ presentation: z.string(), nonce: z.string(), audience: z.string() })
       .safeParse(await c.req.json().catch(() => null));

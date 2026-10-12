@@ -177,3 +177,36 @@ describe('two verifier instances', () => {
     expect((await one.request('/internal/sync', json({ requests: [] }, { 'x-internal-key': 'wrong' }))).status).toBe(403);
   });
 });
+
+describe('partner access', () => {
+  const partner = () =>
+    createVerifierApp(openVerifierDb(':memory:'), () => null, { apiKey: 'partner-key', allowedOrigins: ['http://partner.example'] });
+
+  it('partner endpoints need the X-API-Key header', async () => {
+    const app = partner();
+    const body = { verifierId: 'verifier:nova-arena' };
+    const noKey = await app.request('/v1/requests', json(body));
+    expect(noKey.status).toBe(401);
+    expect((await noKey.json()).error.code).toBe('invalid_api_key');
+    expect((await app.request('/v1/requests', json(body, { 'x-api-key': 'wrong' }))).status).toBe(401);
+
+    const created = await app.request('/v1/requests', json(body, { 'x-api-key': 'partner-key' }));
+    expect(created.status).toBe(201);
+    const { requestId } = await created.json();
+    expect((await app.request(`/v1/requests/${requestId}`)).status).toBe(401);
+    expect((await app.request(`/v1/requests/${requestId}`, { headers: { 'x-api-key': 'partner-key' } })).status).toBe(200);
+    expect((await app.request('/v1/verifiers')).status).toBe(401);
+    // The wallet has no partner key: its two endpoints work with the request id alone.
+    expect((await app.request(`/v1/requests/${requestId}/object`)).status).toBe(200);
+  });
+
+  it('CORS allows the configured partner origin and no other', async () => {
+    const app = partner();
+    const preflight = (origin: string) =>
+      app.request('/v1/requests', { method: 'OPTIONS', headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'x-api-key' } });
+    const allowed = await preflight('http://partner.example');
+    expect(allowed.headers.get('access-control-allow-origin')).toBe('http://partner.example');
+    expect(allowed.headers.get('access-control-allow-headers')).toContain('x-api-key');
+    expect((await preflight('http://evil.example')).headers.get('access-control-allow-origin')).toBe(null);
+  });
+});

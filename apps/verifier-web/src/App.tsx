@@ -3,6 +3,10 @@ import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { BRAND, CLAIM_LABELS, URLS } from '@true/shared';
 
+// Filled in by vite.config.ts from .env (PARTNER_API_KEY).
+declare const __VERIFIER_API_KEY__: string;
+const HEADERS = { 'content-type': 'application/json', 'x-api-key': __VERIFIER_API_KEY__ };
+
 type Verifier = { id: string; name: string; purpose: string; claims: string[] };
 type Check = { requestId: string; walletUrl: string; qr: string };
 type Status = { state: 'pending' | 'verified' | 'denied' | 'expired'; result: { claims?: Record<string, unknown>; issuer?: string; code?: string; message?: string } | null; servedBy?: string | null };
@@ -17,7 +21,7 @@ export default function App() {
   // Load the verifier list; keep trying every 2 seconds while no server is available.
   useEffect(() => {
     if (verifiers.length > 0) return;
-    const load = () => fetch(URLS.verifierApi + '/v1/verifiers').then((r) => r.json()).then((b) => { if (b.verifiers) setVerifiers(b.verifiers); }).catch(() => {});
+    const load = () => fetch(URLS.verifierApi + '/v1/verifiers', { headers: HEADERS }).then((r) => r.json()).then((b) => { if (b.verifiers) setVerifiers(b.verifiers); }).catch(() => {});
     load();
     const timer = setInterval(load, 2000);
     return () => clearInterval(timer);
@@ -28,7 +32,7 @@ export default function App() {
     setActive(verifier);
     setStatus(null);
     setCheck(null);
-    const response = await fetch(URLS.verifierApi + '/v1/requests', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ verifierId: verifier.id }) }).catch(() => null);
+    const response = await fetch(URLS.verifierApi + '/v1/requests', { method: 'POST', headers: HEADERS, body: JSON.stringify({ verifierId: verifier.id }) }).catch(() => null);
     setUnavailable(!response || !response.ok);
     if (!response || !response.ok) return;
     const body = await response.json();
@@ -40,7 +44,7 @@ export default function App() {
     if (!check) return;
     let extraTries = 0;
     const timer = setInterval(async () => {
-      const response = await fetch(`${URLS.verifierApi}/v1/requests/${check.requestId}`).catch(() => null);
+      const response = await fetch(`${URLS.verifierApi}/v1/requests/${check.requestId}`, { headers: HEADERS }).catch(() => null);
       setUnavailable(!response || response.status === 503);
       if (!response || !response.ok) return;
       const next: Status = { ...(await response.json()), servedBy: response.headers.get('X-Served-By') };
@@ -106,7 +110,7 @@ function InstancePanel() {
   }, []);
 
   // name is an instance number, or "all".
-  const act = (action: 'kill' | 'restart', name: string) => fetch(`${URLS.verifierApi}/proxy/${action}/${name}`, { method: 'POST' }).then(refresh);
+  const act = (action: 'kill' | 'restart', name: string) => fetch(`${URLS.verifierApi}/proxy/${action}/${name}`, { method: 'POST', headers: HEADERS }).then(refresh);
 
   if (!info) return <div className="mb-6 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">Front door (port 4000) is not reachable. Is "npm run dev" running?</div>;
   const button = 'rounded px-2 py-1 text-xs text-white disabled:opacity-30';
