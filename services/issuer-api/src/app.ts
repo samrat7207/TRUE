@@ -14,6 +14,7 @@ const CREDENTIAL_VALID_DAYS = 365;
 
 // Reason CODES only: free text could leak personal details into logs.
 const REVOKE_REASONS = ['left_institution', 'graduated', 'lost_device', 'issued_in_error', 'misconduct'] as const;
+const REINSTATE_REASONS = ['revoked_in_error', 're_enrolled', 'device_replaced', 'appeal_accepted'] as const;
 
 export type IssuerKeys = { publicJwk: Jwk; privateJwk: Jwk };
 
@@ -159,7 +160,10 @@ export function createIssuerApp(db: DatabaseSync, firstKey: IssuerKeys, chain?: 
     // Give the student a position in the revocation status list (kept if they already have one).
     let statusIndex = student.status_list_index;
     if (statusIndex === null) {
-      const max = db.prepare('SELECT MAX(status_list_index) AS m FROM students').get() as { m: number | null };
+      // Next free position: one past the highest ever used, including positions retired by a revocation.
+      const max = db.prepare(
+        'SELECT MAX(m) AS m FROM (SELECT MAX(status_list_index) AS m FROM students UNION ALL SELECT MAX(idx) FROM retired_indexes)',
+      ).get() as { m: number | null };
       statusIndex = max.m === null ? 0 : max.m + 1;
       db.prepare('UPDATE students SET status_list_index = ? WHERE id = ?').run(statusIndex, student.id);
     }
@@ -218,6 +222,21 @@ export function createIssuerApp(db: DatabaseSync, firstKey: IssuerKeys, chain?: 
       try { await chain?.anchorStatusList(statusListHash(bitsHex), version); anchored = Boolean(chain); } catch { anchored = false; }
     }
     return c.json({ ok: true, statusIndex: student.status_list_index, anchored });
+  });
+
+  // Admin: give a revoked student their eligibility back. A reason code must be filled in.
+  // The OLD credential stays revoked for ever (its bit is never cleared). The student becomes active again
+  // and must collect a NEW credential with a new claim code, which gets a new position in the list.
+  app.post('/v1/students/:id/reinstate', async (c) => {
+    const body = z.object({ reason: z.enum(REINSTATE_REASONS) }).safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json(refuse('bad_request', `reason must be one of: ${REINSTATE_REASONS.join(', ')}`), 400);
+    const student = db.prepare('SELECT * FROM students WHERE id = ?').get(Number(c.req.param('id'))) as Student | undefined;
+    if (!student) return c.json(refuse('unknown_student', 'No such student in the issuer database'), 404);
+    if (student.status !== 'revoked') return c.json(refuse('not_revoked', 'Only a revoked student can be reinstated'), 409);
+
+    if (student.status_list_index !== null) db.prepare('INSERT OR IGNORE INTO retired_indexes (idx) VALUES (?)').run(student.status_list_index);
+    db.prepare("UPDATE students SET status = 'active', revoked_reason = NULL, status_list_index = NULL WHERE id = ?").run(student.id);
+    return c.json({ ok: true, reason: body.data.reason, retiredStatusIndex: student.status_list_index });
   });
 
   // Admin: the issuer's keys and their states (never the private halves).

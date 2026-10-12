@@ -10,6 +10,7 @@ type Key = { kid: string; state: 'Active' | 'Retired' | 'Compromised'; createdAt
 
 // Reason codes only (no free text), so nothing personal can end up in the record.
 const REASONS = ['left_institution', 'graduated', 'lost_device', 'issued_in_error', 'misconduct'];
+const REINSTATE_REASONS = ['revoked_in_error', 're_enrolled', 'device_replaced', 'appeal_accepted'];
 
 // POST JSON and return both the HTTP status and the parsed body.
 async function post(path: string, body: unknown = {}) {
@@ -25,6 +26,7 @@ export default function App() {
   const [offer, setOffer] = useState<Offer | null>(null);
   const [message, setMessage] = useState('');
   const [reasons, setReasons] = useState<Record<number, string>>({});
+  const [reinstateReasons, setReinstateReasons] = useState<Record<number, string>>({}); // empty until the admin picks one
 
   const reload = () => {
     get('/v1/students').then((b) => setStudents(b.students));
@@ -48,6 +50,16 @@ export default function App() {
     setMessage(ok
       ? `Revoked ${student.name}. ${body.anchored ? 'New revocation fingerprint anchored on the chain.' : 'No credential had been issued, so the list did not change.'} Verifiers pick it up at their next scheduled refresh (a few seconds).`
       : `Refused: ${body.error.code}: ${body.error.message}`);
+    reload();
+  }
+
+  // Give the credential back: the student becomes active again, then we open a new claim code for them.
+  // The old credential stays revoked; the student collects a new one.
+  async function reinstate(student: Student) {
+    const { ok, body } = await post(`/v1/students/${student.id}/reinstate`, { reason: reinstateReasons[student.id] });
+    if (!ok) return setMessage(`Refused: ${body.error.code}: ${body.error.message}`);
+    await issue(student.id, student.name);
+    setMessage(`${student.name} reinstated (${body.reason}). The old credential stays revoked; a new claim code is ready on the right.`);
     reload();
   }
 
@@ -95,6 +107,15 @@ export default function App() {
                 <span className={`rounded-full px-2 py-0.5 text-xs ${s.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
                   {s.status}{s.revoked_reason && `: ${s.revoked_reason}`}
                 </span>
+                {s.status === 'revoked' && (
+                  <>
+                    <select value={reinstateReasons[s.id] ?? ''} onChange={(e) => setReinstateReasons({ ...reinstateReasons, [s.id]: e.target.value })} className="rounded-lg border border-slate-300 px-1 py-1.5 text-xs">
+                      <option value="">Reason to give it back…</option>
+                      {REINSTATE_REASONS.map((r) => <option key={r}>{r}</option>)}
+                    </select>
+                    <button disabled={!reinstateReasons[s.id]} onClick={() => reinstate(s)} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm text-white disabled:opacity-30">Give back</button>
+                  </>
+                )}
                 {s.status === 'active' && (
                   <>
                     <button onClick={() => issue(s.id, s.name)} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white">Issue credential</button>

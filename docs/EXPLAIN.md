@@ -218,3 +218,9 @@ Honest limit: the wallet reaches the chain through its own dev server (`/chain`)
 - Each instance card shows calls served, failures (errors on our side) and uptime.
 - If an instance dies mid-test, the front door retries on another alive instance, so calls still succeed.
 - Honest limit: this measures a laptop talking to itself. The numbers show that load is shared and survives a failure; they say nothing about real-world capacity.
+
+### Giving a credential back after revoking
+The issuer console has a **Give back** button on revoked students. A reason code must be chosen first (`revoked_in_error`, `re_enrolled`, `device_replaced`, `appeal_accepted`).
+- The old credential is **not** un-revoked. Its bit stays 1 for ever, because verifiers merge lists with OR and must never be able to "forget" a revocation.
+- The student becomes active again and a new claim code is opened. They collect a **new** credential, which gets a new position in the list. Old positions are kept in `retired_indexes` so they are never reused.
+- In the wallet, the new card replaces the old one for that student.

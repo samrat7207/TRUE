@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS status_list (
   version INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO status_list (id, bits_hex, version) VALUES (1, '', 0);
+-- List positions that belonged to a revoked credential. They are never handed out again,
+-- because a revoked bit can never be turned back to 0.
+CREATE TABLE IF NOT EXISTS retired_indexes (
+  idx INTEGER PRIMARY KEY
+);
 `;
 
 // All demo students are invented. No real person's data is used.

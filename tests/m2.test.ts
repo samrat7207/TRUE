@@ -1,7 +1,7 @@
 // M2 tests: issuer key rotation and compromise, with an in-memory stand-in for the chain registry.
 // (The real contract has its own tests: npm run chain:test.)
 import { describe, expect, it } from 'vitest';
-import { ISSUER_ID } from '@true/shared';
+import { ISSUER_ID, isBitSet } from '@true/shared';
 import { createHolderProof, createPresentation, generateHolderKey, generateSigningKeyPair, type IssuerKeyInfo, type Jwk } from '@true/credentials';
 import { openIssuerDb } from '../services/issuer-api/src/db.ts';
 import { createIssuerApp, type IssuerChain } from '../services/issuer-api/src/app.ts';
@@ -75,6 +75,33 @@ describe('issuer keys', () => {
     // Re-issued under the new key, the same student verifies again.
     const reissued = await issue(1);
     expect((await present(reissued.holder, reissued.credential)).state).toBe('verified');
+  });
+
+  it('give back after revoking: reason required, old credential stays revoked, new one gets a new position', async () => {
+    const { issuer, issue, present } = await setup();
+    const old = await issue(1);
+    const students = async () => (await (await issuer.request('/v1/students')).json()).students;
+    const oldIndex = (await students())[0].status_list_index;
+
+    // Cannot reinstate someone who is not revoked, and the reason must be filled in with a known code.
+    expect((await issuer.request('/v1/students/1/reinstate', json({ reason: 'revoked_in_error' }))).status).toBe(409);
+    await issuer.request('/v1/students/1/revoke', json({ reason: 'issued_in_error' }));
+    expect((await issuer.request('/v1/students/1/reinstate', json({}))).status).toBe(400);
+    expect((await issuer.request('/v1/students/1/reinstate', json({ reason: 'because I say so' }))).status).toBe(400);
+    expect((await issuer.request('/v1/claim-codes', json({ studentId: 1 }))).status).toBe(409); // still revoked
+
+    expect((await issuer.request('/v1/students/1/reinstate', json({ reason: 'revoked_in_error' }))).status).toBe(200);
+    expect((await students())[0]).toMatchObject({ status: 'active', revoked_reason: null, status_list_index: null });
+
+    // The new credential gets a new list position; the old position stays revoked in the published list.
+    const fresh = await issue(1);
+    const newIndex = (await students())[0].status_list_index;
+    expect(newIndex).not.toBe(oldIndex);
+    const list = await (await issuer.request('/v1/status-list')).json();
+    expect(isBitSet(list.bitsHex, oldIndex)).toBe(true);
+    expect(isBitSet(list.bitsHex, newIndex)).toBe(false);
+    expect((await present(fresh.holder, fresh.credential)).state).toBe('verified');
+    expect(old.credential).not.toBe(fresh.credential);
   });
 
   it('revoking publishes a new fingerprint with a higher version, and never the reason text or a name', async () => {
