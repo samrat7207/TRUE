@@ -69,7 +69,12 @@ const KEYS_FILE = new URL('verifier-keys.json', DATA_DIR);
 const savedKeys: Record<string, { privateJwk: Record<string, unknown> }> = existsSync(KEYS_FILE) ? JSON.parse(readFileSync(KEYS_FILE, 'utf8')) : {};
 const verifierKeys = Object.fromEntries(Object.entries(savedKeys).map(([id, pair]) => [id, pair.privateJwk]));
 
+// The accounts service writes the PUBLIC key for session tokens to this file. Reading a file is not a call:
+// the verifier never contacts that service.
+const SESSION_KEY_FILE = new URL('../../../data/session-public-key.json', import.meta.url);
+
 const app = createVerifierApp(db, getIssuerKey, {
+  getSessionKey: () => (existsSync(SESSION_KEY_FILE) ? JSON.parse(readFileSync(SESSION_KEY_FILE, 'utf8')) : null),
   verifierKeys,
   instance: INSTANCE,
   internalKey: INTERNAL_KEY,

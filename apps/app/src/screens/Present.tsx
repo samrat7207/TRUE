@@ -1,7 +1,7 @@
 // Sharing a proof: consent screen -> verifying -> result.
 // Everything shown comes from the signed request, the registry, the stored credential and the verifier's reply.
 import { useEffect, useState } from 'react';
-import { CLAIM_LABELS, SENSITIVE_CLAIMS } from '@true/shared';
+import { CLAIM_LABELS, SENSITIVE_CLAIMS, templateLabel } from '@true/shared';
 import type { RequestCheck } from '@true/credentials';
 import { answerRequest, loadRequest, matchingCredentials, pickCredential, recordBlocked, type Answer } from '@true/wallet-core';
 import { Avatar, Badge, Card, ConsentRow, Field, Orb, PillButton, Screen, StepList, TopBar, go, type StepItem } from '../ui.tsx';
@@ -35,7 +35,10 @@ export function Present({ requestUri }: { requestUri: string }) {
   // The card that can answer this request: it must hold every requested field.
   // If none does, fall back to the newest card so the screen can still explain what is asked.
   const dated = (cards ?? []).map((c) => ({ ...c, addedAt: c.stored.addedAt, issuerId: c.stored.issuerId }));
-  const card = (check?.status === 'verified' ? matchingCredentials(dated, check.request.claims)[0] : undefined) ?? pickCredential(dated);
+  // A register is pinned to ONE institution and ONE ID type: only such a card is offered.
+  const pin = check?.status === 'verified' ? check.request.register : undefined;
+  const matching = check?.status === 'verified' ? matchingCredentials(dated, check.request.claims, pin && { issuer: pin.issuerId, type: pin.type }) : [];
+  const card = matching[0] ?? (pin ? undefined : pickCredential(dated));
 
   async function respond(approve: boolean) {
     if (!check || check.status !== 'verified' || !card) return;
@@ -99,6 +102,18 @@ export function Present({ requestUri }: { requestUri: string }) {
   }
 
   // ---------- consent ----------
+  if (!card && pin) {
+    return (
+      <Screen>
+        <TopBar back="/home" />
+        <Card tone="warn">
+          <div className="font-semibold">You don't have the required ID from {pin.issuerName}</div>
+          <p className="mt-1 text-small">"{pin.name}" (by {pin.owner}) accepts only a {templateLabel(pin.type)} from {pin.issuerName}. Nothing was shared.</p>
+        </Card>
+        <div className="mt-4"><PillButton kind="secondary" onClick={() => go('/home')}>Back to wallet</PillButton></div>
+      </Screen>
+    );
+  }
   if (!card) {
     return (
       <Screen>
@@ -119,14 +134,32 @@ export function Present({ requestUri }: { requestUri: string }) {
 
       <Card className="mb-5">
         <div className="flex items-center gap-3">
-          <Avatar name={verifierName} size={52} />
+          <Avatar name={pin?.name ?? verifierName} size={52} />
           <div className="min-w-0">
-            <div className="font-semibold">{verifierName}</div>
+            <div className="font-semibold">{pin?.name ?? verifierName}</div>
+            {pin && <div className="text-small">Register owned by <b>{pin.owner}</b></div>}
             <div className="text-small text-muted">{request.purpose}</div>
-            <div className="mt-1"><Badge tone="ok">Registered verifier</Badge></div>
+            <div className="mt-1"><Badge tone="ok">{pin ? 'Signed by the registered TRUE register service' : 'Registered verifier'}</Badge></div>
           </div>
         </div>
+        {pin && (
+          <div className="mt-3 rounded-row bg-soft px-3">
+            <Field label="Accepts only">{templateLabel(pin.type)}</Field>
+            <Field label="From">{pin.issuerName}</Field>
+            <Field label="Your card">{templateLabel(card.type)} · {card.stored.id}</Field>
+          </div>
+        )}
       </Card>
+
+      {request.claims.some((name) => SENSITIVE_CLAIMS.includes(name)) && (
+        <Card tone="warn" className="mb-4">
+          <div className="font-semibold text-warn">Sensitive information requested</div>
+          <p className="mt-1 text-small">
+            This asks for: <b>{request.claims.filter((name) => SENSITIVE_CLAIMS.includes(name)).map((name) => CLAIM_LABELS[name] ?? name).join(', ')}</b>.
+            Share only if you know and trust who is asking.
+          </p>
+        </Card>
+      )}
 
       {card.stored.revoked && (
         <Card tone="bad" className="mb-4">

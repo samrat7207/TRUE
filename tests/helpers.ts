@@ -59,9 +59,10 @@ export async function world(verifierOptions: InstanceOptions = {}) {
   const getIssuerKey = (id: string, keyId: string) => chainState.keys.get(`${id}/${keyId}`) ?? null;
 
   const coreDb = openCoreDb(':memory:');
-  const core = (await createCoreApp(coreDb, chain, {
+  const created = await createCoreApp(coreDb, chain, {
     seedAccounts: SEED, now: () => time, getSource: (c) => c.req.header('x-test-source') ?? 'unknown',
-  })).app;
+  });
+  const core = created.app;
 
   // Demo verifiers sign their requests; only the ones marked registered are in the "registry".
   const verifierKeys: Record<string, Jwk> = {};
@@ -72,7 +73,7 @@ export async function world(verifierOptions: InstanceOptions = {}) {
     if (v.registered) verifierRegistry.set(v.id, { name: v.name, allowedClaims: v.claims, publicJwk: pair.publicJwk });
   }
   const verifierDb = openVerifierDb(':memory:');
-  const verifier = createVerifierApp(verifierDb, getIssuerKey, { verifierKeys, ...verifierOptions });
+  const verifier = createVerifierApp(verifierDb, getIssuerKey, { verifierKeys, getSessionKey: () => created.sessionPublicJwk, ...verifierOptions });
 
   // The wallet's network: core API addresses go to the core app, everything else to the verifier.
   const fetchStub: Fetch = async (url, init) => {

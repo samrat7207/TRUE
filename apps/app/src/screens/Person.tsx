@@ -2,9 +2,10 @@
 import { useEffect, useState } from 'react';
 import { CLAIM_LABELS, INSTITUTION_CATEGORIES } from '@true/shared';
 import { getHistory, resetWallet, type HistoryEntry } from '@true/wallet-core';
-import { Avatar, Badge, BottomTabs, Card, Field, PillButton, Screen, TopBar, go } from '../ui.tsx';
+import { Avatar, Badge, Card, Field, PillButton, Screen, TopBar, go } from '../ui.tsx';
 import { api, attempt, setSession, useSession } from '../session.ts';
 import { useCards } from '../wallet.ts';
+import { verifierCall } from './Registers.tsx';
 
 // ---------- Activity: what was shared, with whom, when, and the result ----------
 
@@ -12,7 +13,8 @@ export function Activity() {
   const [history, setHistory] = useState<HistoryEntry[] | null>(null);
   useEffect(() => { getHistory().then(setHistory); }, []);
   return (
-    <Screen tabs={<BottomTabs active="/activity" />}>
+    <Screen>
+      <TopBar back="/profile" />
       <h1 className="text-title font-bold leading-tight">Activity</h1>
       <p className="mt-2 mb-5 text-muted">Every request you answered. Stored only on this device.</p>
       <div className="space-y-3">
@@ -43,21 +45,17 @@ export function Activity() {
   );
 }
 
-// ---------- Discover: one honest card about what is not available ----------
+// ---------- Discover: one honest card about what is not available (shown on the Profile screen) ----------
 
-export function Discover() {
+function DiscoverCard() {
   return (
-    <Screen tabs={<BottomTabs active="/discover" />}>
-      <h1 className="text-title font-bold leading-tight">Discover</h1>
-      <p className="mt-2 mb-5 text-muted">More places to get IDs from.</p>
-      <Card>
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold">Government documents</span>
-          <Badge tone="neutral">Not available</Badge>
-        </div>
-        <p className="mt-2 text-small text-muted">DigiLocker / Aadhaar: planned, needs an official partnership. Not available.</p>
-      </Card>
-    </Screen>
+    <Card className="mb-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold">Government documents</span>
+        <Badge tone="neutral">Not available</Badge>
+      </div>
+      <p className="mt-2 text-small text-muted">DigiLocker / Aadhaar: planned, needs an official partnership. Not available.</p>
+    </Card>
   );
 }
 
@@ -127,10 +125,16 @@ export function Profile() {
         <Field label="Where they are kept">This device only</Field>
         <Field label="Private key">Made on this device, cannot be exported</Field>
       </Card>
+      <div className="mb-4"><PillButton kind="secondary" onClick={() => go('/activity')}>Activity</PillButton></div>
+      <DiscoverCard />
       <div className="mb-4"><PillButton kind="secondary" onClick={() => { setSession(null); go('/'); }}>Log out</PillButton></div>
       <DeleteAccount
-        consequence="Every ID you hold is revoked at its institution (reason: holder deleted), and your wallet on this device is cleared."
-        afterwards={resetWallet}
+        consequence="Every ID you hold is revoked at its institution (reason: holder deleted), your registers are deleted, and your wallet on this device is cleared."
+        afterwards={async () => {
+          // The verifier checks the session token by itself, so this still works right after the account is gone.
+          await verifierCall('/v1/registers/all/delete', {}).catch(() => {});
+          await resetWallet();
+        }}
       />
     </Screen>
   );

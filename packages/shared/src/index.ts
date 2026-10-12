@@ -61,3 +61,7 @@ export type ApiError = { error: { code: string; message: string } };
 export { orHex, setBit, isBitSet } from './bits.ts';
 export { runLoadTest, LOAD_TEST_VERIFIER_ID, type LoadTestStats } from './loadtest.ts';
 export { createFailureLimiter, createRateCounter } from './ratelimit.ts';
+
+// Registers are stored by the verifier service. Their requests are signed with the service's own key,
+// which is the ONE verifier entry on the chain for all registers.
+export const REGISTER_SERVICE_ID = 'verifier:true-registers';

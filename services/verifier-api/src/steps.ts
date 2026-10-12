@@ -30,6 +30,9 @@ const FAILED_STEP: Record<string, (typeof STEP_NAMES)[number]> = {
   revoked: 'revocation_status',
   missing_claims: 'required_claims',
   requirement_not_met: 'required_claims',
+  wrong_issuer: 'required_claims',
+  wrong_credential_type: 'required_claims',
+  register_deleted: 'required_claims',
 };
 
 // null = everything passed. Otherwise: steps before the failing one passed, the failing one failed,

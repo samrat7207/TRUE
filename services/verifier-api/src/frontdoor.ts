@@ -93,7 +93,7 @@ export function createFrontDoor(options: {
       try {
         const response = await backend.forward(url.pathname + url.search, {
           method: c.req.method,
-          headers: { 'content-type': c.req.header('content-type') ?? 'application/json' },
+          headers: { 'content-type': c.req.header('content-type') ?? 'application/json', authorization: c.req.header('authorization') ?? '' },
           body,
         });
         return new Response(await response.text(), {

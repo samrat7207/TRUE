@@ -7,7 +7,8 @@ import { Home, CredentialDetail } from './screens/Wallet.tsx';
 import { Offers } from './screens/Offers.tsx';
 import { Scan } from './screens/ScanTab.tsx';
 import { Present } from './screens/Present.tsx';
-import { Activity, Discover, Profile } from './screens/Person.tsx';
+import { Activity, Profile } from './screens/Person.tsx';
+import { Registers, NewRegister, RegisterCheck } from './screens/Registers.tsx';
 import { InstitutionApp } from './institution/Institution.tsx';
 
 // Reads the current route, e.g. "#/consent?request_uri=…" => path "/consent" plus its parameters.
@@ -43,7 +44,9 @@ export default function App() {
     // key: a new request address starts the consent flow from scratch.
     case '/consent': return <Present key={params.get('request_uri')} requestUri={params.get('request_uri') ?? ''} />;
     case '/activity': return <Activity />;
-    case '/discover': return <Discover />;
+    case '/registers': return <Registers />;
+    case '/register-new': return <NewRegister />;
+    case '/register': return <RegisterCheck key={params.get('id')} id={params.get('id') ?? ''} />;
     case '/profile': return <Profile />;
     default: return <Home />;
   }

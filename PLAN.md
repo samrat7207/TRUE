@@ -381,3 +381,13 @@ Small decisions made (change any of them if you disagree):
 
 ## Part B (not started; waiting for "continue")
 Registers in the person app: pinned institution + credential type + fields, own key on the chain, fresh QR per check, server-side pin enforcement.
+
+## Part B done: registers. Decisions
+- Registers are stored in the verifier database and synced across the three instances (latest change wins; a deletion is a synced marker). They are NOT individual on-chain entries.
+- The chain has ONE verifier entry for all registers (`verifier:true-registers`, the verifier service's key). It signs every register's request; the wallet checks that signature against the chain.
+- The pin (one institution + one ID type) and the field list are enforced on the verifier server: `wrong_issuer`, `wrong_credential_type`, `beyond_register`, `register_deleted`.
+- The verifier checks session tokens locally with the core service's public key read from `data/session-public-key.json`; it never calls the core API.
+- A register's QR is a fresh request each time (new nonce, 2 minutes). A request may ask for fewer fields than the register has, never more.
+- Person tabs are now Wallet, Scan, Offers, Registers; Activity and the "Government documents: not available" card moved into Profile.
+- Deleting a person account also deletes their registers (the app calls the verifier as part of deletion).
+- Not done in this fast pass: browser verification, README / EXPLAIN updates, extra tests beyond the five requested.

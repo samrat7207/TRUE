@@ -5,15 +5,16 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { LOAD_TEST_VERIFIER_ID, URLS } from '@true/shared';
-import { verifyPresentation, signRequest, randomToken, type IssuerKeyInfo, type Jwk } from '@true/credentials';
-import type { VerifierRow, RequestRow } from './db.ts';
+import { LOAD_TEST_VERIFIER_ID, REGISTER_SERVICE_ID, TEMPLATES, URLS } from '@true/shared';
+import { verifyPresentation, verifySession, signRequest, randomToken, type IssuerKeyInfo, type Jwk, type Session } from '@true/credentials';
+import type { VerifierRow, RequestRow, RegisterRow } from './db.ts';
 import { buildSteps } from './steps.ts';
 import {
-  addAuditEvent, deleteLoadTestRequests, exportState, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
+  addAuditEvent, deleteLoadTestRequests, exportState, saveRegister, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
 } from './sync.ts';
 
 const REQUEST_MINUTES = 5;
+const REGISTER_REQUEST_MINUTES = 2; // a register's QR is fresh every time and short-lived
 
 // Looks up an issuer key (public key + state) in the chain registry. Null if it is not there.
 export type IssuerKeyLookup = (issuerId: string, keyId: string) => Promise<IssuerKeyInfo | null> | IssuerKeyInfo | null;
@@ -26,7 +27,9 @@ export type InstanceOptions = {
   internalKey?: string; // secret both instances know; protects /internal/*
   sendToPeer?: (state: SharedState) => Promise<unknown>; // delivers changes to the other instances
   syncedAtStart?: boolean;
-  verifierKeys?: Record<string, Jwk>; // verifier id => private key used to sign that verifier's requests // true if this instance pulled the full state from a peer when it started
+  verifierKeys?: Record<string, Jwk>;
+  // The accounts service's PUBLIC key, used to check session tokens here without calling that service.
+  getSessionKey?: () => Jwk | null; // verifier id => private key used to sign that verifier's requests // true if this instance pulled the full state from a peer when it started
 };
 
 export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLookup, options: InstanceOptions = {}) {
@@ -127,10 +130,92 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
 
   // The verifier screen lists who it can act as (three demo verifiers).
   app.get('/v1/verifiers', (c) => {
-    const rows = db.prepare('SELECT * FROM verifiers WHERE id != ? ORDER BY name').all(LOAD_TEST_VERIFIER_ID) as VerifierRow[];
+    const rows = db.prepare('SELECT * FROM verifiers WHERE id NOT IN (?, ?) ORDER BY name').all(LOAD_TEST_VERIFIER_ID, REGISTER_SERVICE_ID) as VerifierRow[];
     return c.json({
       verifiers: rows.map((v) => ({ id: v.id, name: v.name, purpose: v.purpose, claims: JSON.parse(v.allowed_claims_json) })),
     });
+  });
+
+  // ---------- registers (a person's saved checks) ----------
+
+  // Who is calling? The session token is checked locally with the accounts service's public key.
+  async function personFrom(c: { req: { header: (name: string) => string | undefined } }): Promise<Session | null> {
+    const key = options.getSessionKey?.();
+    const session = key ? await verifySession((c.req.header('authorization') ?? '').replace(/^Bearer /, ''), key) : null;
+    return session?.kind === 'person' ? session : null;
+  }
+  const notSignedIn = refuse('not_signed_in', 'Log in as a person first');
+  const liveRegister = (id: string) => db.prepare('SELECT * FROM registers WHERE id = ? AND deleted = 0').get(id) as RegisterRow | undefined;
+  const registerView = (r: RegisterRow) => ({
+    id: r.id, name: r.name, purpose: r.purpose, issuerId: r.issuer_id, issuerName: r.issuer_name, type: r.type, fields: JSON.parse(r.fields_json) as string[], createdAt: r.created_at,
+  });
+  async function storeRegister(register: RegisterRow) {
+    saveRegister(db, register);
+    await share({ registers: [register] });
+  }
+
+  app.get('/v1/registers', async (c) => {
+    const person = await personFrom(c);
+    if (!person) return c.json(notSignedIn, 401);
+    const rows = db.prepare('SELECT * FROM registers WHERE owner_id = ? AND deleted = 0 ORDER BY created_at DESC').all(person.sub) as RegisterRow[];
+    return c.json({ registers: rows.map(registerView) });
+  });
+
+  // Set up ONCE: a name, a purpose, ONE institution, ONE ID type, and the fields (only from that type's template).
+  app.post('/v1/registers', async (c) => {
+    const person = await personFrom(c);
+    if (!person) return c.json(notSignedIn, 401);
+    const body = z.object({
+      name: z.string().trim().min(2).max(60), purpose: z.string().trim().min(2).max(120),
+      issuerId: z.string().startsWith('inst:'), issuerName: z.string().trim().min(1).max(80),
+      type: z.enum(Object.keys(TEMPLATES) as [string, ...string[]]), fields: z.array(z.string()).min(1),
+    }).safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json(refuse('bad_request', 'name, purpose, institution, ID type and at least one field are required'), 400);
+    const allowed = TEMPLATES[body.data.type].fields;
+    if (body.data.fields.some((field) => !allowed.includes(field))) return c.json(refuse('bad_fields', `Fields must come from the ${body.data.type} template: ${allowed.join(', ')}`), 400);
+    const now = new Date().toISOString();
+    const register: RegisterRow = {
+      id: `reg:${randomToken().slice(0, 12)}`, owner_id: person.sub, owner_name: person.name, name: body.data.name, purpose: body.data.purpose,
+      issuer_id: body.data.issuerId, issuer_name: body.data.issuerName, type: body.data.type, fields_json: JSON.stringify([...new Set(body.data.fields)]),
+      created_at: now, updated_at: now, deleted: 0,
+    };
+    await storeRegister(register);
+    return c.json({ register: registerView(register) }, 201);
+  });
+
+  // Delete one register (its QR codes stop working at once), or all of mine (used when the account is deleted).
+  app.post('/v1/registers/:id/delete', async (c) => {
+    const person = await personFrom(c);
+    if (!person) return c.json(notSignedIn, 401);
+    const mine = c.req.param('id') === 'all'
+      ? (db.prepare('SELECT * FROM registers WHERE owner_id = ? AND deleted = 0').all(person.sub) as RegisterRow[])
+      : [liveRegister(c.req.param('id'))].filter((r): r is RegisterRow => r?.owner_id === person.sub);
+    if (mine.length === 0 && c.req.param('id') !== 'all') return c.json(refuse('unknown_register', 'No such register'), 404);
+    for (const register of mine) await storeRegister({ ...register, deleted: 1, updated_at: new Date().toISOString() });
+    return c.json({ ok: true, deleted: mine.length });
+  });
+
+  // The QR icon: a FRESH request every time (new nonce, 2 minutes), asking for the register's stored fields.
+  app.post('/v1/registers/:id/requests', async (c) => {
+    const person = await personFrom(c);
+    if (!person) return c.json(notSignedIn, 401);
+    const register = liveRegister(c.req.param('id'));
+    if (!register || register.owner_id !== person.sub) return c.json(refuse('unknown_register', 'No such register'), 404);
+    // A request may ask for fewer fields than the register was set up with, never for more.
+    const stored = JSON.parse(register.fields_json) as string[];
+    const body = z.object({ claims: z.array(z.string()).min(1).optional() }).safeParse(await c.req.json().catch(() => ({})));
+    const claims = body.success && body.data.claims ? body.data.claims : stored;
+    if (claims.some((claim) => !stored.includes(claim))) return c.json(refuse('beyond_register', 'A request cannot ask for fields the register was not set up with'), 400);
+
+    const id = randomToken();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + REGISTER_REQUEST_MINUTES * 60_000).toISOString();
+    db.prepare('INSERT INTO requests (id, verifier_id, claims_json, nonce, created_at, expires_at, updated_at, register_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      id, REGISTER_SERVICE_ID, JSON.stringify(claims), randomToken(), now.toISOString(), expiresAt, now.toISOString(), register.id,
+    );
+    await recordAndShare('request.created', id);
+    const requestUri = `${URLS.verifierApi}/v1/requests/${id}/object`;
+    return c.json({ requestId: id, requestUri, walletUrl: `${URLS.app}/#/consent?request_uri=${encodeURIComponent(requestUri)}`, expiresAt }, 201);
   });
 
   // Create a presentation request: which claims, plus a fresh one-time nonce.
@@ -162,10 +247,14 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     const request = getRequest(c.req.param('id'));
     if (!request) return c.json(refuse('unknown_request', 'No such request'), 404);
     const verifier = getVerifier(request.verifier_id)!;
+    // A request from a register carries the register's name, owner and its ONE institution and ID type.
+    const register = request.register_id ? liveRegister(request.register_id) : undefined;
+    if (request.register_id && !register) return c.json(refuse('register_deleted', 'This register was deleted'), 404);
     const content = {
+      ...(register ? { register: { id: register.id, name: register.name, owner: register.owner_name, issuerId: register.issuer_id, issuerName: register.issuer_name, type: register.type } } : {}),
       requestId: request.id,
       verifierId: verifier.id,
-      purpose: verifier.purpose,
+      purpose: register?.purpose ?? verifier.purpose,
       claims: JSON.parse(request.claims_json) as string[],
       nonce: request.nonce,
       responseUri: `${URLS.verifierApi}/v1/requests/${request.id}/response`,
@@ -207,8 +296,17 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     // Policy check: every claim we asked for must actually have been disclosed.
     const wanted = JSON.parse(request.claims_json) as string[];
     let outcome: { state: 'verified' | 'denied'; result: object };
+    // The pin, enforced HERE on the server: a register accepts ONE institution and ONE ID type,
+    // even if another credential happens to carry fields with the same names and values.
+    const register = request.register_id ? liveRegister(request.register_id) : undefined;
     if (!result.ok) {
       outcome = { state: 'denied', result: { code: result.code, message: result.message } };
+    } else if (request.register_id && !register) {
+      outcome = { state: 'denied', result: { code: 'register_deleted', message: 'This register was deleted' } };
+    } else if (register && result.issuer !== register.issuer_id) {
+      outcome = { state: 'denied', result: { code: 'wrong_issuer', message: `This register only accepts IDs from ${register.issuer_name}` } };
+    } else if (register && result.type !== register.type) {
+      outcome = { state: 'denied', result: { code: 'wrong_credential_type', message: `This register only accepts a ${TEMPLATES[register.type].label}` } };
     } else if (result.statusIndex === null) {
       outcome = { state: 'denied', result: { code: 'missing_status', message: 'The credential has no revocation index' } };
     } else if (isRevoked(db, result.statusIndex)) {
