@@ -1,6 +1,6 @@
 // Starts ONE verifier instance. The front door (proxy.ts) starts several of these:
 // instance N on port 4002, 4012, 4022, ... each with its own database file verifier-N.db.
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { ISSUER_ID, STATUS_LIST_URL } from '@true/shared';
@@ -64,7 +64,13 @@ for (const peer of PEER_URLS) {
 }
 if (!caughtUp) console.log(`Instance ${INSTANCE}: no live peer, starting from its own database`);
 
+// Each demo verifier signs its requests with its own private key (made by scripts/chain-setup.ts).
+const KEYS_FILE = new URL('verifier-keys.json', DATA_DIR);
+const savedKeys: Record<string, { privateJwk: Record<string, unknown> }> = existsSync(KEYS_FILE) ? JSON.parse(readFileSync(KEYS_FILE, 'utf8')) : {};
+const verifierKeys = Object.fromEntries(Object.entries(savedKeys).map(([id, pair]) => [id, pair.privateJwk]));
+
 const app = createVerifierApp(db, getIssuerKey, {
+  verifierKeys,
   instance: INSTANCE,
   internalKey: INTERNAL_KEY,
   sendToPeer: PEER_URLS.length ? sendToPeers : undefined,

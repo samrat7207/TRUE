@@ -13,6 +13,7 @@ export default function App() {
   const [check, setCheck] = useState<Check | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  const [overAsk, setOverAsk] = useState(false); // demo: also ask for the home address
 
   // Load the verifier list; keep trying every 2 seconds while no server is available.
   useEffect(() => {
@@ -28,7 +29,7 @@ export default function App() {
     setActive(verifier);
     setStatus(null);
     setCheck(null);
-    const response = await fetch(URLS.verifierApi + '/v1/requests', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ verifierId: verifier.id }) }).catch(() => null);
+    const response = await fetch(URLS.verifierApi + '/v1/requests', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(overAsk ? { verifierId: verifier.id, claims: [...verifier.claims, 'address'] } : { verifierId: verifier.id }) }).catch(() => null);
     setUnavailable(!response || !response.ok);
     if (!response || !response.ok) return;
     const body = await response.json();
@@ -65,12 +66,17 @@ export default function App() {
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
         {verifiers.map((v) => (
           <button key={v.id} onClick={() => start(v)} className={`rounded-xl border-2 bg-white p-4 text-left shadow-sm ${active?.id === v.id ? 'border-indigo-600' : 'border-transparent'}`}>
-            <div className="font-semibold">{v.name}</div>
+            <div className="font-semibold">{v.name}{v.id === 'verifier:free-prize-booth' && <span className="ml-2 rounded bg-rose-100 px-1.5 py-0.5 text-xs font-normal text-rose-700">not registered (phishing demo)</span>}</div>
             <div className="text-xs text-slate-500">{v.purpose}</div>
             <div className="mt-2 text-xs text-indigo-700">Asks for: {v.claims.map((c) => CLAIM_LABELS[c]).join(', ')}</div>
           </button>
         ))}
       </div>
+
+      <label className="mb-6 flex items-center gap-2 text-sm text-slate-600">
+        <input type="checkbox" checked={overAsk} onChange={(e) => setOverAsk(e.target.checked)} />
+        Demo: over-ask (the next check also requests the home address; the wallet should flag and block it)
+      </label>
 
       <InstancePanel />
 

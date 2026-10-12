@@ -7,7 +7,7 @@
 // The same file runs in the browser (wallet) and in Node (issuer, verifier, tests).
 import { SDJwtVcInstance } from '@sd-jwt/sd-jwt-vc';
 import { ES256, digest, generateSalt, sha256 } from '@owf/crypto';
-import { SignJWT, jwtVerify, EmbeddedJWK, decodeJwt, decodeProtectedHeader } from 'jose';
+import { SignJWT, jwtVerify, importJWK, EmbeddedJWK, decodeJwt, decodeProtectedHeader } from 'jose';
 
 // A JSON Web Key: a key written as a small JSON object.
 export type Jwk = Record<string, unknown>;
@@ -256,4 +256,62 @@ export function disclosedClaimNames(presentation: string): string[] {
 function fromBase64Url(text: string): Uint8Array {
   const base64 = text.replace(/-/g, '+').replace(/_/g, '/');
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+}
+
+// ---------- verifier authentication: signed requests ----------
+
+// What a verifier asks for. Signed by the verifier so the wallet can tell who is really asking.
+export type PresentationRequest = {
+  requestId: string;
+  verifierId: string;
+  purpose: string;
+  claims: string[];
+  nonce: string;
+  responseUri: string;
+};
+
+// What the registry says about a verifier.
+export type VerifierInfo = { name: string; allowedClaims: string[]; publicJwk: Jwk };
+
+// Verifier side: sign the request with the verifier's private key. "iss" names the verifier.
+export async function signRequest(request: PresentationRequest, privateJwk: Jwk, expiresAt: Date): Promise<string> {
+  return new SignJWT({ ...request })
+    .setProtectedHeader({ alg: 'ES256', typ: 'presentation-request+jwt' })
+    .setIssuer(request.verifierId)
+    .setIssuedAt()
+    .setExpirationTime(expiresAt)
+    .sign(await importJWK(privateJwk, 'ES256'));
+}
+
+export type RequestCheck =
+  // Signature matches the key registered for this verifier. extraClaims = asked for beyond its registration.
+  | { status: 'verified'; request: PresentationRequest; verifierName: string; extraClaims: string[] }
+  // Nobody registered this verifier id. claimedBy is what the request says about itself: do not trust it.
+  | { status: 'unregistered'; claimedBy: string }
+  // The id is registered but the signature does not match its key: forged or changed on the way.
+  | { status: 'tampered'; claimedBy: string };
+
+// Wallet side: decide whether a request really comes from a registered verifier.
+// The name shown to the user comes from the registry, never from the request itself.
+export async function authenticateRequest(
+  signedRequest: string,
+  getVerifier: (verifierId: string) => Promise<VerifierInfo | null> | VerifierInfo | null,
+): Promise<RequestCheck> {
+  let claimedBy: string;
+  try {
+    claimedBy = String(decodeJwt(signedRequest).iss); // read without trusting, to know which key to check
+  } catch {
+    return { status: 'tampered', claimedBy: 'unreadable request' };
+  }
+  const verifier = await getVerifier(claimedBy);
+  if (!verifier) return { status: 'unregistered', claimedBy };
+  try {
+    const { payload } = await jwtVerify(signedRequest, await importJWK(verifier.publicJwk, 'ES256'), { algorithms: ['ES256'], issuer: claimedBy });
+    const request = payload as unknown as PresentationRequest;
+    if (request.verifierId !== claimedBy) return { status: 'tampered', claimedBy };
+    const extraClaims = request.claims.filter((claim) => !verifier.allowedClaims.includes(claim));
+    return { status: 'verified', request, verifierName: verifier.name, extraClaims };
+  } catch {
+    return { status: 'tampered', claimedBy };
+  }
 }

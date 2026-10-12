@@ -1,7 +1,8 @@
 // Wallet: holds credentials, shows the consent screen, and sends only the approved claims.
 import { useEffect, useState } from 'react';
 import { BRAND, CLAIM_LABELS, ALL_CLAIMS, URLS } from '@true/shared';
-import { createHolderProof, createPresentation, readCredential } from '@true/credentials';
+import { authenticateRequest, createHolderProof, createPresentation, readCredential, type RequestCheck } from '@true/credentials';
+import { createRegistryReader } from '@true/registry';
 import {
   addCredential, addHistory, getCredentials, getHistory, getHolderKey, removeCredential,
   type HistoryEntry, type StoredCredential,
@@ -172,13 +173,12 @@ function Claim({ initialCode }: { initialCode: string }) {
 
 // ---------- Present: consent screen ----------
 
-type RequestObject = {
-  requestId: string; verifierId: string; verifierName: string; purpose: string;
-  claims: string[]; nonce: string; responseUri: string; expiresAt: string;
-};
+// The wallet reads the public verifier registry straight from the chain (through the dev server's /chain path).
+declare const __REGISTRY_ADDRESS__: `0x${string}`;
+const registry = createRegistryReader({ rpcUrl: window.location.origin + '/chain', address: __REGISTRY_ADDRESS__ });
 
 function Present({ requestUri }: { requestUri: string }) {
-  const [request, setRequest] = useState<RequestObject | null>(null);
+  const [check, setCheck] = useState<RequestCheck | null>(null);
   const [stored, setStored] = useState<StoredCredential | null>(null);
   const [claims, setClaims] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState<'loading' | 'ready' | 'sending' | 'done' | 'error'>('loading');
@@ -190,7 +190,9 @@ function Present({ requestUri }: { requestUri: string }) {
         const response = await fetch(requestUri);
         const body = await response.json();
         if (!response.ok) throw new Error(body.error.message);
-        setRequest(body);
+        // Who is really asking? Check the request's signature against the key registered on the chain.
+        // Everything shown below comes from the signed request and the registry, not from the plain reply.
+        setCheck(await authenticateRequest(body.signedRequest ?? '', (id) => registry.getVerifier(id)));
         // Use the first credential in the wallet (the demo has one credential type).
         const first = (await getCredentials())[0];
         if (!first) throw new Error('You have no credential in this wallet yet.');
@@ -205,7 +207,8 @@ function Present({ requestUri }: { requestUri: string }) {
   }, [requestUri]);
 
   async function answer(approve: boolean) {
-    if (!request || !stored) return;
+    if (!check || check.status !== 'verified' || !stored) return;
+    const request = check.request;
     setStatus('sending');
     let body: object = { declined: true };
     if (approve) {
@@ -220,31 +223,65 @@ function Present({ requestUri }: { requestUri: string }) {
     const response = await fetch(request.responseUri, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const result = await response.json();
     const outcome = response.ok ? result.state : result.error.code;
-    await addHistory({ at: new Date().toISOString(), verifierName: request.verifierName, claims: request.claims, decision: approve ? 'shared' : 'declined', outcome });
-    setMessage(approve ? (outcome === 'verified' ? 'Shared. The verifier accepted your proof.' : `The verifier did not accept it (${result.code ?? outcome}).`) : 'You declined. Nothing was shared.');
+    await addHistory({ at: new Date().toISOString(), verifierName: check.verifierName, claims: request.claims, decision: approve ? 'shared' : 'declined', outcome });
+    setMessage(approve ? (outcome === 'verified' ? 'Shared. The verifier accepted your proof.' : `The verifier did not accept it (${result.code ?? result.error?.message ?? outcome}).`) : 'You declined. Nothing was shared.');
     setStatus('done');
+  }
+
+  // A blocked request never gets an answer from this wallet: nothing is sent at all.
+  async function closeBlocked(name: string, reason: string) {
+    await addHistory({ at: new Date().toISOString(), verifierName: name, claims: [], decision: 'declined', outcome: `blocked: ${reason}` });
+    goHome();
   }
 
   if (status === 'loading') return <p className="text-sm text-slate-500">Loading request…</p>;
   if (status === 'error') return <Notice text={message} tone="bad" />;
   if (status === 'done') return <Notice text={message} tone={message.startsWith('Shared') ? 'good' : 'neutral'} />;
-  if (!request) return null;
+  if (!check) return null;
 
+  // Red screen: unregistered verifier, or a request whose signature does not match the registered key.
+  if (check.status !== 'verified') {
+    const unregistered = check.status === 'unregistered';
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border-2 border-rose-500 bg-rose-50 p-4 text-rose-900">
+          <div className="text-lg font-bold">⚠ {unregistered ? 'Unregistered verifier' : 'Request has been tampered with'}</div>
+          <p className="mt-2 text-sm">
+            {unregistered
+              ? <>This request says it comes from <b>{check.claimedBy}</b>, but nobody with that id is in the verifier registry. It may be a phishing attempt.</>
+              : <>This request uses the id <b>{check.claimedBy}</b>, but its signature does not match the key registered for that verifier. Someone forged or changed it.</>}
+          </p>
+          <p className="mt-2 text-sm font-semibold">Sharing is blocked. Nothing has been sent.</p>
+        </div>
+        <button onClick={() => closeBlocked(check.claimedBy, check.status)} className="w-full rounded-xl bg-slate-800 py-3 font-medium text-white">Close</button>
+      </div>
+    );
+  }
+
+  const request = check.request;
+  const overAsking = check.extraClaims.length > 0;
   const hidden = ALL_CLAIMS.filter((name) => !request.claims.includes(name));
   return (
     <div className="space-y-4">
       <div className="rounded-xl bg-white p-4">
         <div className="text-xs uppercase text-slate-500">Request from</div>
-        <div className="text-xl font-semibold">{request.verifierName}</div>
+        <div className="text-xl font-semibold">{check.verifierName}</div>
         <div className="text-sm text-slate-600">Purpose: {request.purpose}</div>
-        <div className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">Verifier identity is not checked yet (added in the next milestone).</div>
+        <div className="mt-2 rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-800">✓ Verified verifier: signed request matches the key in the on-chain registry.</div>
       </div>
 
+      {overAsking && (
+        <div className="rounded-xl border-2 border-amber-500 bg-amber-50 p-4 text-amber-900">
+          <div className="font-bold">⚠ Asking for more than it is registered for</div>
+          <p className="mt-1 text-sm">{check.verifierName} is not registered to ask for: <b>{check.extraClaims.map((name) => CLAIM_LABELS[name] ?? name).join(', ')}</b>. Sharing is blocked.</p>
+        </div>
+      )}
+
       <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4">
-        <div className="mb-2 text-sm font-semibold text-emerald-800">Will be shared</div>
+        <div className="mb-2 text-sm font-semibold text-emerald-800">{overAsking ? 'Was asked for' : 'Will be shared'}</div>
         {request.claims.map((name) => (
-          <div key={name} className="flex items-center justify-between gap-3 py-1 text-sm">
-            <span>{CLAIM_LABELS[name] ?? name}</span>
+          <div key={name} className={`flex items-center justify-between gap-3 py-1 text-sm ${check.extraClaims.includes(name) ? 'text-amber-700' : ''}`}>
+            <span>{CLAIM_LABELS[name] ?? name}{check.extraClaims.includes(name) && ' (not registered)'}</span>
             {name === 'photo'
               ? <img src={String(claims[name])} alt="" className="h-8 w-8 rounded" />
               : <span className="font-medium">{claims[name] === true ? 'Yes' : claims[name] === false ? 'No' : String(claims[name])}</span>}
@@ -259,7 +296,7 @@ function Present({ requestUri }: { requestUri: string }) {
 
       <div className="flex gap-3">
         <button onClick={() => answer(false)} disabled={status === 'sending'} className="flex-1 rounded-xl border border-slate-300 bg-white py-3 font-medium">Decline</button>
-        <button onClick={() => answer(true)} disabled={status === 'sending'} className="flex-1 rounded-xl bg-emerald-600 py-3 font-medium text-white">{status === 'sending' ? 'Sending…' : 'Approve'}</button>
+        <button onClick={() => answer(true)} disabled={status === 'sending' || overAsking} className="flex-1 rounded-xl bg-emerald-600 py-3 font-medium text-white disabled:opacity-30">{status === 'sending' ? 'Sending…' : 'Approve'}</button>
       </div>
     </div>
   );

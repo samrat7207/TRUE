@@ -6,7 +6,7 @@ import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
 import { URLS } from '@true/shared';
-import { verifyPresentation, randomToken, type IssuerKeyInfo } from '@true/credentials';
+import { verifyPresentation, signRequest, randomToken, type IssuerKeyInfo, type Jwk } from '@true/credentials';
 import type { VerifierRow, RequestRow } from './db.ts';
 import {
   addAuditEvent, exportState, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
@@ -24,7 +24,8 @@ export type InstanceOptions = {
   instance?: string; // name shown in the status panel, e.g. "1"
   internalKey?: string; // secret both instances know; protects /internal/*
   sendToPeer?: (state: SharedState) => Promise<unknown>; // delivers changes to the other instances
-  syncedAtStart?: boolean; // true if this instance pulled the full state from a peer when it started
+  syncedAtStart?: boolean;
+  verifierKeys?: Record<string, Jwk>; // verifier id => private key used to sign that verifier's requests // true if this instance pulled the full state from a peer when it started
 };
 
 export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLookup, options: InstanceOptions = {}) {
@@ -107,16 +108,19 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
 
   // Create a presentation request: which claims, plus a fresh one-time nonce.
   app.post('/v1/requests', async (c) => {
-    const body = z.object({ verifierId: z.string() }).safeParse(await c.req.json().catch(() => null));
+    // "claims" is optional: by default a verifier asks for exactly what it is registered for.
+    // Asking for more is allowed here on purpose, so the demo can show the wallet flagging it.
+    const body = z.object({ verifierId: z.string(), claims: z.array(z.string()).min(1).optional() }).safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(refuse('bad_request', 'verifierId is required'), 400);
     const verifier = getVerifier(body.data.verifierId);
     if (!verifier) return c.json(refuse('unknown_verifier', 'No such verifier'), 404);
+    const claimsJson = body.data.claims ? JSON.stringify(body.data.claims) : verifier.allowed_claims_json;
 
     const id = randomToken();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + REQUEST_MINUTES * 60_000).toISOString();
     db.prepare('INSERT INTO requests (id, verifier_id, claims_json, nonce, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      id, verifier.id, verifier.allowed_claims_json, randomToken(), now.toISOString(), expiresAt, now.toISOString(),
+      id, verifier.id, claimsJson, randomToken(), now.toISOString(), expiresAt, now.toISOString(),
     );
     await recordAndShare('request.created', id);
     const requestUri = `${URLS.verifierApi}/v1/requests/${id}/object`;
@@ -125,21 +129,23 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     return c.json({ requestId: id, requestUri, walletUrl, expiresAt }, 201);
   });
 
-  // Wallet: fetch what is being asked. (M3 turns this into a signed JWT so the wallet can authenticate the verifier.)
-  app.get('/v1/requests/:id/object', (c) => {
+  // Wallet: fetch what is being asked. "signedRequest" is the same content signed with the verifier's key;
+  // the wallet trusts only that, after checking it against the chain registry.
+  app.get('/v1/requests/:id/object', async (c) => {
     const request = getRequest(c.req.param('id'));
     if (!request) return c.json(refuse('unknown_request', 'No such request'), 404);
     const verifier = getVerifier(request.verifier_id)!;
-    return c.json({
+    const content = {
       requestId: request.id,
       verifierId: verifier.id,
-      verifierName: verifier.name,
       purpose: verifier.purpose,
-      claims: JSON.parse(request.claims_json),
+      claims: JSON.parse(request.claims_json) as string[],
       nonce: request.nonce,
       responseUri: `${URLS.verifierApi}/v1/requests/${request.id}/response`,
-      expiresAt: request.expires_at,
-    });
+    };
+    const key = options.verifierKeys?.[verifier.id];
+    const signedRequest = key ? await signRequest(content, key, new Date(request.expires_at)) : null;
+    return c.json({ ...content, verifierName: verifier.name, expiresAt: request.expires_at, signedRequest });
   });
 
   // Wallet: send the presentation, or tell us the user declined.
