@@ -5,11 +5,11 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { URLS } from '@true/shared';
+import { LOAD_TEST_VERIFIER_ID, URLS } from '@true/shared';
 import { verifyPresentation, signRequest, randomToken, type IssuerKeyInfo, type Jwk } from '@true/credentials';
 import type { VerifierRow, RequestRow } from './db.ts';
 import {
-  addAuditEvent, exportState, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
+  addAuditEvent, deleteLoadTestRequests, exportState, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
 } from './sync.ts';
 
 const REQUEST_MINUTES = 5;
@@ -48,9 +48,12 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
 
   // Record an audit event and share the request's new state. No claim values are logged or shared.
   async function recordAndShare(type: string, requestId: string) {
+    const request = getRequest(requestId)!;
+    // Synthetic load-test requests are shared (so any instance can answer a poll) but kept out of the audit log.
+    if (request.verifier_id === LOAD_TEST_VERIFIER_ID) return share({ requests: [toShared(request)] });
     const event = { id: randomToken(), ts: new Date().toISOString(), type, request_id: requestId, instance };
     addAuditEvent(db, event);
-    await share({ requests: [toShared(getRequest(requestId)!)], auditEvents: [event] });
+    await share({ requests: [toShared(request)], auditEvents: [event] });
   }
 
   // Saves the final outcome. "AND state = 'pending'" means a request can be answered exactly once,
@@ -64,7 +67,19 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
 
   // ---------- instance health and state sharing ----------
 
-  app.get('/health', (c) => c.json({ instance, alive: true, lastSyncedAt }));
+  // Simple counters for the status cards: calls served, calls that failed on our side, and time since start.
+  const startedAt = Date.now();
+  let served = 0;
+  let failures = 0;
+  app.use('/v1/*', async (c, next) => {
+    await next();
+    served += 1;
+    if (c.res.status >= 500) failures += 1;
+  });
+
+  app.get('/health', (c) =>
+    c.json({ instance, alive: true, lastSyncedAt, served, failures, uptimeSeconds: Math.round((Date.now() - startedAt) / 1000) }),
+  );
 
   // Everything under /internal needs the shared secret. Only the other instance has it.
   app.use('/internal/*', async (c, next) => {
@@ -111,7 +126,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
 
   // The verifier screen lists who it can act as (three demo verifiers).
   app.get('/v1/verifiers', (c) => {
-    const rows = db.prepare('SELECT * FROM verifiers ORDER BY name').all() as VerifierRow[];
+    const rows = db.prepare('SELECT * FROM verifiers WHERE id != ? ORDER BY name').all(LOAD_TEST_VERIFIER_ID) as VerifierRow[];
     return c.json({
       verifiers: rows.map((v) => ({ id: v.id, name: v.name, purpose: v.purpose, claims: JSON.parse(v.allowed_claims_json) })),
     });
@@ -225,6 +240,19 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       state: expired ? 'expired' : request.state,
       result: request.result_json ? JSON.parse(request.result_json) : null,
     });
+  });
+
+  // End of a load test: delete its synthetic requests here and on every peer,
+  // and write ONE summary line to the audit log (counts only).
+  app.post('/v1/load-test/cleanup', async (c) => {
+    const body = z.object({ requests: z.number().int(), failures: z.number().int() }).safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json(refuse('bad_request', 'requests and failures are required'), 400);
+    deleteLoadTestRequests(db);
+    const summary = `load-test: ${body.data.requests} requests, ${body.data.failures} failures`;
+    const event = { id: randomToken(), ts: new Date().toISOString(), type: 'loadtest.summary', request_id: summary, instance };
+    addAuditEvent(db, event);
+    await share({ deleteLoadTest: true, auditEvents: [event] });
+    return c.json({ ok: true });
   });
 
   // Stateless check for partner back ends (Convergence Round): they supply their own nonce and audience.

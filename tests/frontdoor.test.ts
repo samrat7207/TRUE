@@ -1,5 +1,6 @@
 // Front door tests: rate limiting, with in-process verifier instances and a clock we can move.
 import { describe, expect, it } from 'vitest';
+import { runLoadTest } from '@true/shared';
 import { sha256Hex } from '@true/credentials';
 import { openVerifierDb } from '../services/verifier-api/src/db.ts';
 import { createVerifierApp } from '../services/verifier-api/src/app.ts';
@@ -102,5 +103,83 @@ describe('rate limiting', () => {
     expect((await create('other-kiosk')).status).toBe(201);
     advance(61);
     expect((await create('kiosk')).status).toBe(201);
+  });
+});
+
+describe('load test', () => {
+  // Three instances that share state with each other, like the real ones.
+  function cluster(limits: Limits = DEFAULT_LIMITS) {
+    const apps: ReturnType<typeof createVerifierApp>[] = [];
+    const dbs = [0, 1, 2].map(() => openVerifierDb(':memory:'));
+    const dead = new Set<number>();
+    dbs.forEach((db, self) => {
+      apps.push(createVerifierApp(db, () => null, {
+        instance: String(self + 1),
+        internalKey: 'k',
+        sendToPeer: async (state) => {
+          await Promise.all(apps.map(async (peer, i) => {
+            if (i !== self && !dead.has(i)) await peer.request('/internal/sync', { method: 'POST', headers: { 'content-type': 'application/json', 'x-internal-key': 'k' }, body: JSON.stringify(state) });
+          }));
+        },
+      }));
+    });
+    const backends: Backend[] = apps.map((app, i) => ({
+      name: String(i + 1), port: 0, alive: true, health: {},
+      forward: async (path, init) => { if (dead.has(i)) throw new Error('connection refused'); return app.request(path, init); },
+    }));
+    const door = createFrontDoor({ backends, limits, getSource: () => 'kiosk', hashSource: (text) => sha256Hex(text).slice(0, 16) });
+    const call = async (path: string, init?: RequestInit) => door.request(path, init);
+    const count = (db: (typeof dbs)[number], table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+    return { door, dbs, call, count, kill: (i: number) => dead.add(i) };
+  }
+
+  it('spreads the calls across all alive instances with no failures', async () => {
+    const { call } = cluster();
+    const stats = await runLoadTest(call, () => {});
+    expect(stats.failures).toBe(0);
+    expect(stats.calls).toBe(100);
+    expect(Object.keys(stats.perInstance).sort()).toEqual(['instance 1', 'instance 2', 'instance 3']);
+    for (const served of Object.values(stats.perInstance)) expect(served).toBeGreaterThan(20);
+  });
+
+  it('killing an instance mid-test does not make requests fail', async () => {
+    const { call, kill } = cluster();
+    let killed = false;
+    const stats = await runLoadTest(call, (progress) => {
+      if (!killed && progress.calls >= 30) { killed = true; kill(0); } // instance 1 dies after 30 calls
+    });
+    expect(killed).toBe(true);
+    expect(stats.failures).toBe(0);
+    expect(stats.calls).toBe(100);
+    // The two survivors took over the rest of the load.
+    expect(stats.perInstance['instance 2'] + stats.perInstance['instance 3']).toBeGreaterThan(65);
+  });
+
+  it('the status panel reports a dead instance as dead even if its last health answer said alive', async () => {
+    const { door, backends } = setup(2);
+    backends[0].health = { alive: true, served: 4 };
+    backends[0].alive = false;
+    const status = await (await door.request('/proxy/status')).json();
+    expect(status.instances[0]).toMatchObject({ name: '1', alive: false, served: 4 });
+    expect(status.instances[1].alive).toBe(true);
+  });
+
+  it('uses its own limit bucket, leaves one audit line, and cleans up everywhere', async () => {
+    // Normal creation limit is tiny here; the load test must neither hit it nor use it up.
+    const { call, door, dbs, count } = cluster({ ...DEFAULT_LIMITS, createMax: 2 });
+    const stats = await runLoadTest(call, () => {});
+    expect(stats.failures).toBe(0);
+    expect((await door.request('/v1/requests', json({ verifierId: 'verifier:nova-arena' }))).status).toBe(201);
+
+    for (const db of dbs) {
+      // Only the one real request above is left, and the audit log has the summary line plus that request.
+      expect(count(db, 'requests')).toBe(1);
+      const events = db.prepare('SELECT type, request_id FROM audit_events ORDER BY type').all() as { type: string; request_id: string }[];
+      expect(events.map((e) => e.type)).toEqual(['loadtest.summary', 'request.created']);
+      expect(events[0].request_id).toBe('load-test: 50 requests, 0 failures');
+    }
+    // The synthetic verifier is not offered as a normal verifier.
+    const list = await (await door.request('/v1/verifiers')).json();
+    expect(list.verifiers.map((v: { id: string }) => v.id)).not.toContain('verifier:load-test');
   });
 });

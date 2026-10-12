@@ -47,3 +47,5 @@ export { orHex, setBit, isBitSet } from './bits.ts';
 export const STATUS_LIST_URL = URLS.issuerApi + '/v1/status-list';
 // Local chain (Hardhat node) JSON-RPC address.
 export const CHAIN_RPC_URL = 'http://localhost:8545';
+
+export { runLoadTest, LOAD_TEST_VERIFIER_ID, type LoadTestStats } from './loadtest.ts';

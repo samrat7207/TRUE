@@ -2,6 +2,7 @@
 // It does not know how instances are started or reached; proxy.ts supplies that. This keeps it testable:
 // the tests plug in in-process instances instead of real network calls.
 import { Hono, type Context } from 'hono';
+import { LOAD_TEST_VERIFIER_ID } from '@true/shared';
 import { cors } from 'hono/cors';
 import { createFailureLimiter, createRateCounter } from './ratelimit.ts';
 
@@ -23,6 +24,8 @@ export type Limits = {
 };
 export const DEFAULT_LIMITS: Limits = { failMax: 5, failWindowSeconds: 60, blockSeconds: 60, createMax: 120 };
 
+const LOAD_TEST_MAX_PER_MINUTE = 1000;
+
 export type BlockEvent = { at: string; source: string; verifierId: string; seconds: number };
 
 export function createFrontDoor(options: {
@@ -39,6 +42,9 @@ export function createFrontDoor(options: {
   const now = options.now ?? Date.now;
   const failureLimiter = createFailureLimiter({ max: limits.failMax, windowSeconds: limits.failWindowSeconds, blockSeconds: limits.blockSeconds, now });
   const createCounter = createRateCounter({ max: limits.createMax, windowSeconds: 60, now });
+  // The load test button has its own, larger bucket: it must not be stopped by the normal limit,
+  // and it must not use up the allowance of real kiosks.
+  const loadTestCounter = createRateCounter({ max: LOAD_TEST_MAX_PER_MINUTE, windowSeconds: 60, now });
 
   const blockEvents: BlockEvent[] = []; // newest first
   // Which verifier each request belongs to, learned when the request is created through this door.
@@ -58,7 +64,8 @@ export function createFrontDoor(options: {
 
   app.get('/proxy/status', (c) =>
     c.json({
-      instances: backends.map((b) => ({ name: b.name, port: b.port, alive: b.alive, ...b.health })),
+      // Health details first, then our own view of "alive" on top (the last health answer may be out of date).
+      instances: backends.map((b) => ({ ...b.health, name: b.name, port: b.port, alive: b.alive })),
       blocked: { active: failureLimiter.blockedCount(), total: blockEvents.length, recent: blockEvents.slice(0, 5) },
       limits,
       now: now(),
@@ -104,7 +111,8 @@ export function createFrontDoor(options: {
   app.post('/v1/requests', async (c) => {
     const body = await c.req.text();
     const source = c.req.header('x-api-key') || options.getSource(c);
-    const wait = createCounter.hit(source);
+    const isLoadTest = body.includes(LOAD_TEST_VERIFIER_ID);
+    const wait = (isLoadTest ? loadTestCounter : createCounter).hit(source);
     if (wait > 0) return tooMany(c, 'too_many_requests', wait);
 
     const response = await forward(c, body);

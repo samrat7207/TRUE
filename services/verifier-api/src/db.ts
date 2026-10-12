@@ -1,6 +1,7 @@
 // Verifier database: this verifier's own config, requests and results.
 // It is a separate file from the issuer database and holds no student records.
 import { DatabaseSync } from 'node:sqlite';
+import { LOAD_TEST_VERIFIER_ID } from '@true/shared';
 
 export type VerifierRow = {
   id: string;
@@ -64,6 +65,8 @@ export const DEMO_VERIFIERS = [
   { id: 'verifier:campus-store', name: 'Campus Store', purpose: 'Student discount', claims: ['is_student'], registered: true },
   // The phishing demo: a verifier nobody registered. The wallet must warn about it.
   { id: 'verifier:free-prize-booth', name: 'Free Prize Booth', purpose: 'Win a free phone', claims: ['name', 'dob', 'address'], registered: false },
+  // Synthetic verifier used only by the load test button. Not registered, never shown as a verifier card.
+  { id: LOAD_TEST_VERIFIER_ID, name: 'Load test (synthetic)', purpose: 'Synthetic load test', claims: ['is_student'], registered: false },
 ];
 
 // Opens (and on first run creates and seeds) the verifier database. Use ':memory:' in tests.

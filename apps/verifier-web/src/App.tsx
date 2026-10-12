@@ -1,7 +1,7 @@
 // Verifier screen: pick who you are, show a QR, and watch the result arrive live.
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { BRAND, CLAIM_LABELS, URLS } from '@true/shared';
+import { BRAND, CLAIM_LABELS, URLS, runLoadTest, type LoadTestStats } from '@true/shared';
 
 type Verifier = { id: string; name: string; purpose: string; claims: string[] };
 type Check = { requestId: string; walletUrl: string; qr: string };
@@ -79,6 +79,7 @@ export default function App() {
       </label>
 
       <InstancePanel />
+      <LoadTest />
 
       {unavailable && <div className="mb-6 rounded-xl border-2 border-amber-400 bg-amber-50 p-4 text-amber-900"><b>No server available.</b> Every verifier instance is down. Restart one above; this page recovers on its own.</div>}
 
@@ -99,7 +100,7 @@ export default function App() {
 }
 
 type Blocked = { active: number; total: number; recent: { at: string; source: string; verifierId: string; seconds: number }[] };
-type InstanceInfo = { name: string; port: number; alive: boolean; lastSyncedAt: number | null };
+type InstanceInfo = { name: string; port: number; alive: boolean; lastSyncedAt: number | null; served?: number; failures?: number; uptimeSeconds?: number };
 
 // One card per verifier instance behind the front door, each with its own Kill and Restart button.
 function InstancePanel() {
@@ -132,6 +133,7 @@ function InstancePanel() {
             <div className="font-semibold">Instance {i.name} <span className="font-normal text-slate-500">:{i.port}</span> · {i.alive ? 'alive' : 'dead'}</div>
             <div className="mb-2 text-xs text-slate-500">
               {i.lastSyncedAt ? `last synced ${Math.max(0, Math.round((info.now - i.lastSyncedAt) / 1000))} seconds ago` : 'not synced yet'}
+              {i.alive && <div>served {i.served ?? 0} · failures {i.failures ?? 0} · up {i.uptimeSeconds ?? 0}s</div>}
             </div>
             <div className="flex gap-2">
               <button disabled={!i.alive} onClick={() => act('kill', i.name)} className={button + ' bg-rose-600'}>Kill</button>
@@ -149,6 +151,38 @@ function InstancePanel() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// "Run load test": 50 synthetic requests through the front door, as the clearly-labelled load-test verifier.
+// Each is created once and polled once. The bars show which instance served each call.
+function LoadTest() {
+  const [stats, setStats] = useState<LoadTestStats | null>(null);
+  const run = () => runLoadTest((path, init) => fetch(URLS.verifierApi + path, init), setStats);
+  const busiest = stats ? Math.max(1, ...Object.values(stats.perInstance)) : 1;
+  return (
+    <div className="mb-6 rounded-xl bg-white p-3 text-sm shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs text-slate-500">Load test: 50 synthetic requests (create + poll = 100 calls) as "Load test (synthetic)". Not real verifications; deleted afterwards.</span>
+        <button onClick={run} disabled={stats?.running} className="shrink-0 rounded-lg bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-40">{stats?.running ? 'Running…' : 'Run load test'}</button>
+      </div>
+      {stats && (
+        <div className="mt-3 space-y-1">
+          {Object.entries(stats.perInstance).sort().map(([name, count]) => (
+            <div key={name} className="flex items-center gap-2 text-xs">
+              <span className="w-20 text-slate-600">{name}</span>
+              <div className="h-4 flex-1 rounded bg-slate-100"><div className="h-4 rounded bg-indigo-500" style={{ width: `${(count / busiest) * 100}%` }} /></div>
+              <span className="w-8 text-right font-mono">{count}</span>
+            </div>
+          ))}
+          <div className="pt-1 text-xs text-slate-600">
+            {stats.calls} of {stats.totalCalls} calls · average {stats.averageMs} ms · slowest {stats.slowestMs} ms ·{' '}
+            <span className={stats.failures > 0 ? 'font-semibold text-rose-700' : 'text-emerald-700'}>{stats.failures} failures</span>
+            {!stats.running && ' · finished, synthetic requests deleted'}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

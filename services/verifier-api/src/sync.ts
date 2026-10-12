@@ -3,12 +3,20 @@
 // Merging is idempotent: receiving the same data twice changes nothing.
 // Nothing shared here contains personal data: disclosed claim values are stripped before sending.
 import type { DatabaseSync } from 'node:sqlite';
-import { isBitSet, orHex, setBit } from '@true/shared';
+import { LOAD_TEST_VERIFIER_ID, isBitSet, orHex, setBit } from '@true/shared';
 import type { RequestRow } from './db.ts';
 
 export type AuditEvent = { id: string; ts: string; type: string; request_id: string; instance: string };
 export type SharedRequest = Omit<RequestRow, 'result_json'> & { result: Record<string, unknown> | null };
-export type SharedState = { requests?: SharedRequest[]; statusBitsHex?: string; auditEvents?: AuditEvent[] };
+export type SharedState = {
+  requests?: SharedRequest[];
+  statusBitsHex?: string;
+  auditEvents?: AuditEvent[];
+  deleteLoadTest?: boolean; // "the load test is over: delete its synthetic requests"
+};
+
+// Removes every synthetic load-test request from this instance.
+export const deleteLoadTestRequests = (db: DatabaseSync) => db.prepare('DELETE FROM requests WHERE verifier_id = ?').run(LOAD_TEST_VERIFIER_ID);
 
 // A request as the other instance may see it: outcome and reason code, but never the disclosed claims.
 export function toShared(row: RequestRow): SharedRequest {
@@ -61,7 +69,8 @@ export function addAuditEvent(db: DatabaseSync, event: AuditEvent): void {
 // Everything this instance knows (used when the other instance restarts and needs to catch up).
 export function exportState(db: DatabaseSync): SharedState {
   return {
-    requests: (db.prepare('SELECT * FROM requests').all() as RequestRow[]).map(toShared),
+    // Synthetic load-test requests are not part of the normal request list.
+    requests: (db.prepare('SELECT * FROM requests WHERE verifier_id != ?').all(LOAD_TEST_VERIFIER_ID) as RequestRow[]).map(toShared),
     statusBitsHex: getStatusBits(db),
     auditEvents: db.prepare('SELECT * FROM audit_events').all() as AuditEvent[],
   };
@@ -82,6 +91,7 @@ export function mergeState(db: DatabaseSync, incoming: SharedState): void {
       );
     }
   }
+  if (incoming.deleteLoadTest) deleteLoadTestRequests(db);
   if (incoming.statusBitsHex) saveStatusBits(db, orHex(getStatusBits(db), incoming.statusBitsHex));
   for (const event of incoming.auditEvents ?? []) addAuditEvent(db, event);
 }
