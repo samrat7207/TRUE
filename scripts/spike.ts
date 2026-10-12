@@ -15,6 +15,9 @@ const holder = await generateHolderKey();
 const credential = await issueCredential({
   issuerId: 'issuer:spike',
   issuerPrivateJwk: issuer.privateJwk,
+  keyId: 'key-1',
+  statusIndex: 0,
+  statusListUrl: 'http://localhost/status',
   holderPublicJwk: holder.publicJwk,
   type: 'StudentCredential',
   claims: { name: 'Test Student', dob: '2005-01-01', age_over_18: true },
@@ -30,7 +33,7 @@ const presentation = await createPresentation({
 });
 
 const check = (text: string) =>
-  verifyPresentation({ presentation: text, nonce: 'nonce-1', audience: 'verifier:spike', getIssuerPublicJwk: () => issuer.publicJwk });
+  verifyPresentation({ presentation: text, nonce: 'nonce-1', audience: 'verifier:spike', getIssuerKey: () => ({ publicJwk: issuer.publicJwk, state: 'Active' }) });
 
 const good = await check(presentation);
 console.log(good.ok ? 'verified' : 'NOT verified: ' + good.message, good.ok ? good.claims : '');

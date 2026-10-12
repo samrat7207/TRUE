@@ -8,6 +8,7 @@
     "test": "vitest run",
     "spike": "node scripts/spike.ts",
     "brand": "node scripts/sync-brand.mjs",
+    "reset": "node scripts/reset.mjs",
     "chain:test": "npm test -w contracts"
   },
   "devDependencies": {

@@ -1,0 +1,4 @@
+{
+  "name": "@true/registry", "version": "0.1.0", "private": true, "type": "module", "main": "src/index.ts",
+  "dependencies": { "viem": "^2.57.4" }
+}

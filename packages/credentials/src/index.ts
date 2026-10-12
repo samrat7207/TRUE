@@ -6,8 +6,8 @@
 //   - WebCrypto         : built into browsers and Node; makes the holder key and random values
 // The same file runs in the browser (wallet) and in Node (issuer, verifier, tests).
 import { SDJwtVcInstance } from '@sd-jwt/sd-jwt-vc';
-import { ES256, digest, generateSalt } from '@owf/crypto';
-import { SignJWT, jwtVerify, EmbeddedJWK, decodeJwt } from 'jose';
+import { ES256, digest, generateSalt, sha256 } from '@owf/crypto';
+import { SignJWT, jwtVerify, EmbeddedJWK, decodeJwt, decodeProtectedHeader } from 'jose';
 
 // A JSON Web Key: a key written as a small JSON object.
 export type Jwk = Record<string, unknown>;
@@ -36,6 +36,11 @@ export function randomToken(): string {
 export function randomClaimCode(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   return Array.from(randomBytes(8), (b) => alphabet[b % 32]).join('');
+}
+
+// SHA-256 fingerprint of a text, as hex. Used to compare the revocation list with its anchor on the chain.
+export function sha256Hex(text: string): string {
+  return Array.from(sha256(text), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ---------- keys ----------
@@ -95,7 +100,10 @@ export async function verifyHolderProof(
 export async function issueCredential(input: {
   issuerId: string;
   issuerPrivateJwk: Jwk;
+  keyId: string; // which issuer key signed this (the verifier looks it up in the registry)
   holderPublicJwk: Jwk;
+  statusIndex: number; // this credential's position in the issuer's revocation list
+  statusListUrl: string;
   type: string;
   claims: Record<string, unknown>;
   validDays: number;
@@ -113,10 +121,14 @@ export async function issueCredential(input: {
       exp: now + input.validDays * 24 * 60 * 60,
       vct: input.type,
       cnf: { jwk: input.holderPublicJwk }, // binds the credential to the holder's key
+      // Always visible to the verifier: where to find the revocation bit for this credential.
+      // It is a position number in a public list, not personal data.
+      revocation: { idx: input.statusIndex, uri: input.statusListUrl },
       ...input.claims,
     },
     // Every claim becomes its own salted hash, so each one can be revealed or hidden separately.
     { _sd: Object.keys(input.claims) } as never,
+    { header: { kid: input.keyId } },
   );
 }
 
@@ -160,8 +172,11 @@ function toBase64Url(bytes: Uint8Array): string {
 
 // ---------- verifier: check a presentation ----------
 
+// What the registry says about an issuer key.
+export type IssuerKeyInfo = { publicJwk: Jwk; state: string }; // state: Active | Retired | Compromised
+
 export type VerifyResult =
-  | { ok: true; issuer: string; claims: Record<string, unknown> }
+  | { ok: true; issuer: string; statusIndex: number | null; claims: Record<string, unknown> }
   | { ok: false; code: string; message: string };
 
 // Checks, in the library: issuer signature, disclosures match the signed hashes, credential expiry,
@@ -170,18 +185,26 @@ export async function verifyPresentation(input: {
   presentation: string;
   nonce: string;
   audience: string;
-  // Looks up a trusted issuer's public key (from the registry). Returns null for unknown issuers.
-  getIssuerPublicJwk: (issuerId: string) => Promise<Jwk | null> | Jwk | null;
+  // Looks up an issuer key in the registry. Returns null for unknown issuers or key ids.
+  getIssuerKey: (issuerId: string, keyId: string) => Promise<IssuerKeyInfo | null> | IssuerKeyInfo | null;
 }): Promise<VerifyResult> {
   // Step 1: read (without trusting) who claims to have issued this, so we know which key to check against.
   let issuer: string;
+  let keyId: string;
   try {
-    issuer = String(decodeJwt(input.presentation.split('~')[0]).iss);
+    const issuerJwt = input.presentation.split('~')[0];
+    issuer = String(decodeJwt(issuerJwt).iss);
+    keyId = String(decodeProtectedHeader(issuerJwt).kid);
   } catch {
     return { ok: false, code: 'malformed', message: 'Not a readable SD-JWT' };
   }
-  const issuerJwk = await input.getIssuerPublicJwk(issuer);
-  if (!issuerJwk) return { ok: false, code: 'unknown_issuer', message: `Issuer ${issuer} is not in the registry` };
+  const issuerKey = await input.getIssuerKey(issuer, keyId);
+  if (!issuerKey) return { ok: false, code: 'unknown_issuer', message: `Issuer ${issuer} key ${keyId} is not in the registry` };
+  // A leaked key can sign anything, so nothing it signed can be trusted any more.
+  if (issuerKey.state === 'Compromised') {
+    return { ok: false, code: 'issuer_key_compromised', message: 'This credential was signed by a key the issuer has marked as compromised' };
+  }
+  const issuerJwk = issuerKey.publicJwk;
 
   // Step 2: full cryptographic verification.
   const sdjwt = new SDJwtVcInstance({
@@ -203,8 +226,9 @@ export async function verifyPresentation(input: {
       allowedKeyBindingAlgorithms: ['ES256'],
     });
     // Return only the disclosed claims, without the technical fields.
-    const { iss, iat, exp, vct, cnf, status, ...claims } = result.payload as Record<string, unknown>;
-    return { ok: true, issuer, claims };
+    const { iss, iat, exp, vct, cnf, revocation, ...claims } = result.payload as Record<string, unknown>;
+    const statusIndex = (revocation as { idx?: number } | undefined)?.idx ?? null;
+    return { ok: true, issuer, statusIndex, claims };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, code: errorCode(message), message };

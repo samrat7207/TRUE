@@ -3,6 +3,7 @@
 // Merging is idempotent: receiving the same data twice changes nothing.
 // Nothing shared here contains personal data: disclosed claim values are stripped before sending.
 import type { DatabaseSync } from 'node:sqlite';
+import { isBitSet, orHex, setBit } from '@true/shared';
 import type { RequestRow } from './db.ts';
 
 export type AuditEvent = { id: string; ts: string; type: string; request_id: string; instance: string };
@@ -27,26 +28,23 @@ export function getStatusBits(db: DatabaseSync): string {
 const saveStatusBits = (db: DatabaseSync, hex: string) =>
   db.prepare('INSERT INTO status_list (id, bits_hex) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET bits_hex = excluded.bits_hex').run(hex);
 
-// Bitwise OR of two bit lists. A bit that is 1 (revoked) on either side stays 1: revoked stays revoked.
-export function orHex(a: string, b: string): string {
-  const length = Math.max(a.length, b.length);
-  let out = '';
-  for (let i = 0; i < length; i += 2) {
-    const byte = parseInt(a.slice(i, i + 2) || '0', 16) | parseInt(b.slice(i, i + 2) || '0', 16);
-    out += byte.toString(16).padStart(2, '0');
-  }
-  return out;
-}
+export const setRevoked = (db: DatabaseSync, index: number) => saveStatusBits(db, setBit(getStatusBits(db), index));
+export const isRevoked = (db: DatabaseSync, index: number) => isBitSet(getStatusBits(db), index);
 
-export function setRevoked(db: DatabaseSync, index: number): void {
-  const byte = Math.floor(index / 8);
-  const mask = '00'.repeat(byte) + (1 << (index % 8)).toString(16).padStart(2, '0');
-  saveStatusBits(db, orHex(getStatusBits(db), mask));
-}
-
-export function isRevoked(db: DatabaseSync, index: number): boolean {
-  const byte = parseInt(getStatusBits(db).slice(Math.floor(index / 8) * 2, Math.floor(index / 8) * 2 + 2) || '0', 16);
-  return (byte & (1 << (index % 8))) !== 0;
+// Scheduled revocation refresh. Downloads the issuer's whole public list, and accepts it ONLY if its
+// fingerprint equals the one the issuer anchored on the chain. Accepted bits are OR-ed into our copy.
+// Returns what happened, and the merged bits when something changed (so the caller can share them).
+export async function refreshStatusList(db: DatabaseSync, source: {
+  fetchList: () => Promise<{ bitsHex: string }>; // the issuer's public status-list file
+  getAnchorHash: () => Promise<string>; // fingerprint from the chain registry
+  hash: (text: string) => string; // SHA-256 (from packages/credentials)
+}): Promise<'updated' | 'unchanged' | 'mismatch'> {
+  const list = await source.fetchList();
+  if (source.hash(list.bitsHex) !== (await source.getAnchorHash())) return 'mismatch';
+  const merged = orHex(getStatusBits(db), list.bitsHex);
+  if (merged === getStatusBits(db)) return 'unchanged';
+  saveStatusBits(db, merged);
+  return 'updated';
 }
 
 // ---------- audit events ----------

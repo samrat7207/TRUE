@@ -3,14 +3,26 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { ISSUER_ID, ISSUER_NAME, CREDENTIAL_TYPE, URLS } from '@true/shared';
-import { issueCredential, verifyHolderProof, randomClaimCode, randomToken, type Jwk } from '@true/credentials';
-import type { Student, ClaimCode } from './db.ts';
+import { ISSUER_ID, ISSUER_NAME, CREDENTIAL_TYPE, STATUS_LIST_URL, URLS, setBit } from '@true/shared';
+import {
+  issueCredential, verifyHolderProof, randomClaimCode, randomToken, generateSigningKeyPair, sha256Hex, type Jwk,
+} from '@true/credentials';
+import type { Student, ClaimCode, IssuerKeyRow } from './db.ts';
 
 const CLAIM_CODE_MINUTES = 10;
 const CREDENTIAL_VALID_DAYS = 365;
 
+// Reason CODES only: free text could leak personal details into logs.
+const REVOKE_REASONS = ['left_institution', 'graduated', 'lost_device', 'issued_in_error', 'misconduct'] as const;
+
 export type IssuerKeys = { publicJwk: Jwk; privateJwk: Jwk };
+
+// The issuer's writes to the public registry on the chain. Optional so tests can run without a chain.
+export type IssuerChain = {
+  addIssuerKey: (keyId: string, publicJwk: Jwk) => Promise<unknown>;
+  setIssuerKeyState: (keyId: string, state: 'Retired' | 'Compromised') => Promise<unknown>;
+  anchorStatusList: (hashHex: string, version: number) => Promise<unknown>;
+};
 
 // Every refusal uses the same JSON shape: { error: { code, message } }.
 const refuse = (code: string, message: string) => ({ error: { code, message } });
@@ -22,17 +34,62 @@ function isOver18(dob: string): boolean {
   return eighteenth <= new Date();
 }
 
-export function createIssuerApp(db: DatabaseSync, keys: IssuerKeys) {
+// The fingerprint that goes on the chain: SHA-256 of the list's hex text.
+export const statusListHash = (bitsHex: string) => sha256Hex(bitsHex);
+
+export function createIssuerApp(db: DatabaseSync, firstKey: IssuerKeys, chain?: IssuerChain) {
   const app = new Hono();
   app.use('*', cors());
 
-  // Public: who this issuer is and which key it signs with.
-  app.get('/v1/.well-known/issuer', (c) => c.json({ id: ISSUER_ID, name: ISSUER_NAME, publicJwk: keys.publicJwk }));
+  // ---------- signing keys ----------
+
+  // On a brand-new database, store the first key as "key-1".
+  const keyCount = db.prepare('SELECT COUNT(*) AS n FROM issuer_keys').get() as { n: number };
+  if (keyCount.n === 0) insertKey('key-1', firstKey);
+
+  function insertKey(kid: string, keys: IssuerKeys) {
+    db.prepare('INSERT INTO issuer_keys (kid, public_jwk, private_jwk, state, created_at) VALUES (?, ?, ?, ?, ?)').run(
+      kid, JSON.stringify(keys.publicJwk), JSON.stringify(keys.privateJwk), 'Active', new Date().toISOString(),
+    );
+  }
+  const allKeys = () => db.prepare('SELECT * FROM issuer_keys ORDER BY created_at, kid').all() as IssuerKeyRow[];
+  const activeKey = () => db.prepare("SELECT * FROM issuer_keys WHERE state = 'Active'").get() as IssuerKeyRow;
+
+  // Make a new Active key and publish its public half on the chain.
+  async function createNewKey(): Promise<string> {
+    const kid = `key-${allKeys().length + 1}`;
+    const keys = await generateSigningKeyPair();
+    insertKey(kid, keys);
+    await chain?.addIssuerKey(kid, keys.publicJwk);
+    return kid;
+  }
+
+  // ---------- revocation list ----------
+
+  const statusList = () => db.prepare('SELECT bits_hex, version FROM status_list WHERE id = 1').get() as { bits_hex: string; version: number };
+
+  // ---------- routes ----------
+
+  // Public: who this issuer is and which key it currently signs with.
+  app.get('/v1/.well-known/issuer', (c) => {
+    const key = activeKey();
+    return c.json({ id: ISSUER_ID, name: ISSUER_NAME, keyId: key.kid, publicJwk: JSON.parse(key.public_jwk) });
+  });
 
   // Admin: list students for the issuer screen.
   app.get('/v1/students', (c) => {
     const students = db.prepare('SELECT * FROM students ORDER BY id').all() as Student[];
     return c.json({ students });
+  });
+
+  // Admin: counts for the issuer screen. "Issued" = students who have collected a credential.
+  app.get('/v1/stats', (c) => {
+    const row = db.prepare(`SELECT
+        COUNT(status_list_index) AS issued,
+        SUM(CASE WHEN status_list_index IS NOT NULL AND status = 'active' THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN status = 'revoked' THEN 1 ELSE 0 END) AS revoked
+      FROM students`).get() as { issued: number; active: number | null; revoked: number | null };
+    return c.json({ issued: row.issued, active: row.active ?? 0, revoked: row.revoked ?? 0 });
   });
 
   // Admin: "Issue credential" button. Creates a one-time, short-lived claim code for one student.
@@ -107,10 +164,14 @@ export function createIssuerApp(db: DatabaseSync, keys: IssuerKeys) {
       db.prepare('UPDATE students SET status_list_index = ? WHERE id = ?').run(statusIndex, student.id);
     }
 
+    const key = activeKey();
     const credential = await issueCredential({
       issuerId: ISSUER_ID,
-      issuerPrivateJwk: keys.privateJwk,
+      issuerPrivateJwk: JSON.parse(key.private_jwk),
+      keyId: key.kid,
       holderPublicJwk,
+      statusIndex,
+      statusListUrl: STATUS_LIST_URL,
       type: CREDENTIAL_TYPE,
       validDays: CREDENTIAL_VALID_DAYS,
       claims: {
@@ -130,6 +191,56 @@ export function createIssuerApp(db: DatabaseSync, keys: IssuerKeys) {
       },
     });
     return c.json({ credential, issuerId: ISSUER_ID, issuerName: ISSUER_NAME }, 201);
+  });
+
+  // Public: the whole revocation list. The same file for everyone, so we cannot tell who is being checked.
+  app.get('/v1/status-list', (c) => {
+    const list = statusList();
+    return c.json({ issuerId: ISSUER_ID, version: list.version, bitsHex: list.bits_hex });
+  });
+
+  // Admin: revoke a student's credential. Flips their bit, then publishes the list's new fingerprint on the chain.
+  app.post('/v1/students/:id/revoke', async (c) => {
+    const body = z.object({ reason: z.enum(REVOKE_REASONS) }).safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json(refuse('bad_request', `reason must be one of: ${REVOKE_REASONS.join(', ')}`), 400);
+    const student = db.prepare('SELECT * FROM students WHERE id = ?').get(Number(c.req.param('id'))) as Student | undefined;
+    if (!student) return c.json(refuse('unknown_student', 'No such student in the issuer database'), 404);
+    if (student.status === 'revoked') return c.json(refuse('already_revoked', 'This student is already revoked'), 409);
+
+    db.prepare("UPDATE students SET status = 'revoked', revoked_reason = ? WHERE id = ?").run(body.data.reason, student.id);
+    let anchored = false;
+    if (student.status_list_index !== null) {
+      const old = statusList();
+      const bitsHex = setBit(old.bits_hex, student.status_list_index);
+      const version = old.version + 1;
+      db.prepare('UPDATE status_list SET bits_hex = ?, version = ? WHERE id = 1').run(bitsHex, version);
+      // Verifiers only accept a list whose fingerprint matches the chain.
+      try { await chain?.anchorStatusList(statusListHash(bitsHex), version); anchored = Boolean(chain); } catch { anchored = false; }
+    }
+    return c.json({ ok: true, statusIndex: student.status_list_index, anchored });
+  });
+
+  // Admin: the issuer's keys and their states (never the private halves).
+  app.get('/v1/keys', (c) => c.json({ keys: allKeys().map((k) => ({ kid: k.kid, state: k.state, createdAt: k.created_at })) }));
+
+  // Admin: normal rotation. New key becomes Active; the old one is Retired, so credentials it signed stay valid.
+  app.post('/v1/keys/rotate', async (c) => {
+    const old = activeKey();
+    db.prepare("UPDATE issuer_keys SET state = 'Retired' WHERE kid = ?").run(old.kid);
+    const kid = await createNewKey();
+    await chain?.setIssuerKeyState(old.kid, 'Retired');
+    return c.json({ ok: true, activeKeyId: kid, retiredKeyId: old.kid });
+  });
+
+  // Admin: emergency. The key leaked: verifiers must reject everything it signed. If it was the Active key, make a new one.
+  app.post('/v1/keys/:kid/compromise', async (c) => {
+    const key = allKeys().find((k) => k.kid === c.req.param('kid'));
+    if (!key) return c.json(refuse('unknown_key', 'No such key'), 404);
+    if (key.state === 'Compromised') return c.json(refuse('already_compromised', 'This key is already marked compromised'), 409);
+    db.prepare("UPDATE issuer_keys SET state = 'Compromised' WHERE kid = ?").run(key.kid);
+    const activeKeyId = key.state === 'Active' ? await createNewKey() : activeKey().kid;
+    await chain?.setIssuerKeyState(key.kid, 'Compromised');
+    return c.json({ ok: true, compromisedKeyId: key.kid, activeKeyId });
   });
 
   return app;

@@ -40,3 +40,10 @@ export const CLAIM_LABELS: Record<string, string> = {
 
 // One JSON error shape for every API.
 export type ApiError = { error: { code: string; message: string } };
+
+export { orHex, setBit, isBitSet } from './bits.ts';
+
+// Where the issuer publishes its revocation list (the whole list, same file for everyone).
+export const STATUS_LIST_URL = URLS.issuerApi + '/v1/status-list';
+// Local chain (Hardhat node) JSON-RPC address.
+export const CHAIN_RPC_URL = 'http://localhost:8545';

@@ -26,7 +26,7 @@ let oneAlive: boolean;
 beforeEach(async () => {
   const keys = await generateSigningKeyPair();
   issuer = createIssuerApp(openIssuerDb(':memory:'), keys);
-  const lookup = (id: string) => (id === ISSUER_ID ? keys.publicJwk : null);
+  const lookup = (id: string) => (id === ISSUER_ID ? { publicJwk: keys.publicJwk, state: 'Active' } : null);
   dbOne = openVerifierDb(':memory:');
   dbTwo = openVerifierDb(':memory:');
   oneAlive = true;
@@ -120,7 +120,7 @@ describe('two verifier instances', () => {
   it('three instances: create on 1, kill 1 and 2, approve through 3 is verified', async () => {
     const keys = await generateSigningKeyPair();
     const localIssuer = createIssuerApp(openIssuerDb(':memory:'), keys);
-    const lookup = (id: string) => (id === ISSUER_ID ? keys.publicJwk : null);
+    const lookup = (id: string) => (id === ISSUER_ID ? { publicJwk: keys.publicJwk, state: 'Active' } : null);
     const apps: App[] = [];
     const alive = [true, true, true];
     // Each instance sends to ALL peers and ignores the ones that are down (same rule as server.ts).

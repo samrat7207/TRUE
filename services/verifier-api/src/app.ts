@@ -1,12 +1,12 @@
 // Verifier API routes.
 // Hard rule: nothing in this file calls the issuer's API or database. A presentation is checked using
-// only its own signatures and the issuer's public key from the registry.
+// only its own signatures, the issuer key from the chain registry, and our cached copy of the revocation list.
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
 import { URLS } from '@true/shared';
-import { verifyPresentation, randomToken, type Jwk } from '@true/credentials';
+import { verifyPresentation, randomToken, type IssuerKeyInfo } from '@true/credentials';
 import type { VerifierRow, RequestRow } from './db.ts';
 import {
   addAuditEvent, exportState, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
@@ -14,8 +14,8 @@ import {
 
 const REQUEST_MINUTES = 5;
 
-// Looks up a trusted issuer's public key. M1: a local registry file. M2: the chain.
-export type IssuerKeyLookup = (issuerId: string) => Promise<Jwk | null> | Jwk | null;
+// Looks up an issuer key (public key + state) in the chain registry. Null if it is not there.
+export type IssuerKeyLookup = (issuerId: string, keyId: string) => Promise<IssuerKeyInfo | null> | IssuerKeyInfo | null;
 
 const refuse = (code: string, message: string) => ({ error: { code, message } });
 
@@ -27,7 +27,7 @@ export type InstanceOptions = {
   syncedAtStart?: boolean; // true if this instance pulled the full state from a peer when it started
 };
 
-export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKeyLookup, options: InstanceOptions = {}) {
+export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLookup, options: InstanceOptions = {}) {
   const app = new Hono();
   app.use('*', cors());
   const instance = options.instance ?? '1';
@@ -168,7 +168,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
       presentation: body.data.presentation,
       nonce: request.nonce,
       audience: request.verifier_id,
-      getIssuerPublicJwk,
+      getIssuerKey,
     });
 
     // Policy check: every claim we asked for must actually have been disclosed.
@@ -176,6 +176,11 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
     let outcome: { state: 'verified' | 'denied'; result: object };
     if (!result.ok) {
       outcome = { state: 'denied', result: { code: result.code, message: result.message } };
+    } else if (result.statusIndex === null) {
+      outcome = { state: 'denied', result: { code: 'missing_status', message: 'The credential has no revocation index' } };
+    } else if (isRevoked(db, result.statusIndex)) {
+      // Signatures are fine, but the issuer has cancelled this credential. Read from our cached list, not from the issuer.
+      outcome = { state: 'denied', result: { code: 'revoked', message: 'Revoked: the issuer has cancelled this credential' } };
     } else if (wanted.some((claim) => !(claim in result.claims))) {
       outcome = { state: 'denied', result: { code: 'missing_claims', message: 'A requested claim was not disclosed' } };
     } else if (wanted.some((claim) => result.claims[claim] === false)) {
@@ -211,7 +216,11 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
       .object({ presentation: z.string(), nonce: z.string(), audience: z.string() })
       .safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(refuse('bad_request', 'presentation, nonce and audience are required'), 400);
-    return c.json(await verifyPresentation({ ...body.data, getIssuerPublicJwk }));
+    const result = await verifyPresentation({ ...body.data, getIssuerKey });
+    if (result.ok && result.statusIndex !== null && isRevoked(db, result.statusIndex)) {
+      return c.json({ ok: false, code: 'revoked', message: 'Revoked: the issuer has cancelled this credential' });
+    }
+    return c.json(result);
   });
 
   return app;

@@ -27,6 +27,8 @@ export type ClaimCode = {
   used_at: string | null;
 };
 
+export type IssuerKeyRow = { kid: string; public_jwk: string; private_jwk: string; state: 'Active' | 'Retired' | 'Compromised'; created_at: string };
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS students (
   id INTEGER PRIMARY KEY,
@@ -51,6 +53,21 @@ CREATE TABLE IF NOT EXISTS claim_codes (
   expires_at TEXT NOT NULL,
   used_at TEXT
 );
+-- Signing keys. Exactly one is Active. The private half never leaves this database.
+CREATE TABLE IF NOT EXISTS issuer_keys (
+  kid TEXT PRIMARY KEY,
+  public_jwk TEXT NOT NULL,
+  private_jwk TEXT NOT NULL,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+-- The revocation list (one row): one bit per credential, 1 = revoked. Version goes up on every change.
+CREATE TABLE IF NOT EXISTS status_list (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bits_hex TEXT NOT NULL,
+  version INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO status_list (id, bits_hex, version) VALUES (1, '', 0);
 `;
 
 // All demo students are invented. No real person's data is used.

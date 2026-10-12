@@ -56,20 +56,21 @@ CREATE TABLE IF NOT EXISTS audit_events (
 
 // Demo verifiers. One process hosts all three to keep the demo to one command;
 // in real life each would run its own copy of this service.
-const DEMO_VERIFIERS: [string, string, string, string[]][] = [
-  ['verifier:city-library', 'City Library', 'Issue a library membership card', ['name', 'photo', 'pnr']],
-  ['verifier:nova-arena', 'Nova Arena', 'Entry to an 18+ event', ['age_over_18']],
-  ['verifier:campus-store', 'Campus Store', 'Student discount', ['is_student']],
+// registered: true means scripts/chain-setup.ts puts this verifier in the on-chain registry.
+export const DEMO_VERIFIERS = [
+  { id: 'verifier:city-library', name: 'City Library', purpose: 'Issue a library membership card', claims: ['name', 'photo', 'pnr'], registered: true },
+  { id: 'verifier:nova-arena', name: 'Nova Arena', purpose: 'Entry to an 18+ event', claims: ['age_over_18'], registered: true },
+  { id: 'verifier:campus-store', name: 'Campus Store', purpose: 'Student discount', claims: ['is_student'], registered: true },
+  // The phishing demo: a verifier nobody registered. The wallet must warn about it.
+  { id: 'verifier:free-prize-booth', name: 'Free Prize Booth', purpose: 'Win a free phone', claims: ['name', 'dob', 'address'], registered: false },
 ];
 
 // Opens (and on first run creates and seeds) the verifier database. Use ':memory:' in tests.
 export function openVerifierDb(path: string): DatabaseSync {
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
-  const count = db.prepare('SELECT COUNT(*) AS n FROM verifiers').get() as { n: number };
-  if (count.n === 0) {
-    const insert = db.prepare('INSERT INTO verifiers (id, name, purpose, allowed_claims_json) VALUES (?, ?, ?, ?)');
-    for (const [id, name, purpose, claims] of DEMO_VERIFIERS) insert.run(id, name, purpose, JSON.stringify(claims));
-  }
+  // INSERT OR IGNORE: safe to run on every start, and adds new demo verifiers to an older database file.
+  const insert = db.prepare('INSERT OR IGNORE INTO verifiers (id, name, purpose, allowed_claims_json) VALUES (?, ?, ?, ?)');
+  for (const v of DEMO_VERIFIERS) insert.run(v.id, v.name, v.purpose, JSON.stringify(v.claims));
   return db;
 }

@@ -9,11 +9,13 @@ import {
   disclosedClaimNames,
   generateHolderKey,
   generateSigningKeyPair,
+  sha256Hex,
 } from '@true/credentials';
 import { openIssuerDb } from '../services/issuer-api/src/db.ts';
 import { createIssuerApp } from '../services/issuer-api/src/app.ts';
 import { openVerifierDb } from '../services/verifier-api/src/db.ts';
 import { createVerifierApp } from '../services/verifier-api/src/app.ts';
+import { isRevoked, refreshStatusList } from '../services/verifier-api/src/sync.ts';
 
 type App = { request: (path: string, init?: RequestInit) => Response | Promise<Response> };
 type Holder = Awaited<ReturnType<typeof generateHolderKey>>;
@@ -21,6 +23,7 @@ type Holder = Awaited<ReturnType<typeof generateHolderKey>>;
 let issuer: App;
 let verifier: App;
 let issuerDb: ReturnType<typeof openIssuerDb>;
+let verifierDb: ReturnType<typeof openVerifierDb>;
 
 const post = (app: App, path: string, body: unknown) =>
   app.request(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -61,7 +64,8 @@ beforeAll(async () => {
   issuerDb = openIssuerDb(':memory:');
   issuer = createIssuerApp(issuerDb, keys);
   // The verifier is given ONLY the issuer's public key (what the registry holds). It has no handle on the issuer app.
-  verifier = createVerifierApp(openVerifierDb(':memory:'), (id) => (id === ISSUER_ID ? keys.publicJwk : null));
+  verifierDb = openVerifierDb(':memory:');
+  verifier = createVerifierApp(verifierDb, (id) => (id === ISSUER_ID ? { publicJwk: keys.publicJwk, state: 'Active' } : null));
 });
 
 describe('happy path', () => {
@@ -240,6 +244,44 @@ describe('issuer database is the gate', () => {
     expect((await post(issuer, '/v1/claim-codes', { studentId: 4 })).status).toBe(409);
   });
 
-  // Goes green in M2, when the status list exists. Kept here so it is not forgotten.
-  it.todo("revoked student's credential fails verification");
+  it("revoked student's credential fails verification", async () => {
+    const { holder, credential } = await issueToStudent(5);
+    const present = async () => {
+      const { requestId, object } = await openRequest('verifier:campus-store');
+      const presentation = await createPresentation({
+        credential, holderPrivateKey: holder.privateKey, claims: object.claims, nonce: object.nonce, audience: object.verifierId,
+      });
+      await respond(requestId, presentation);
+      return stateOf(requestId);
+    };
+    expect((await present()).state).toBe('verified');
+
+    // Issuer revokes. The verifier's scheduled refresh then downloads the public list
+    // and accepts it because its fingerprint matches the one on the "chain".
+    expect((await post(issuer, '/v1/students/5/revoke', { reason: 'left_institution' })).status).toBe(200);
+    const list = await (await issuer.request('/v1/status-list')).json();
+    const outcome = await refreshStatusList(verifierDb, {
+      fetchList: async () => list, getAnchorHash: async () => sha256Hex(list.bitsHex), hash: sha256Hex,
+    });
+    expect(outcome).toBe('updated');
+
+    const after = await present();
+    expect(after.state).toBe('denied');
+    expect(after.result.code).toBe('revoked');
+  });
+
+  it('a revocation list that does not match the chain fingerprint is ignored', async () => {
+    const outcome = await refreshStatusList(verifierDb, {
+      fetchList: async () => ({ bitsHex: 'ffff' }), getAnchorHash: async () => sha256Hex('00'), hash: sha256Hex,
+    });
+    expect(outcome).toBe('mismatch');
+    expect(isRevoked(verifierDb, 9)).toBe(false);
+  });
+
+  it('issuer stats count issued, active and revoked', async () => {
+    const stats = await (await issuer.request('/v1/stats')).json();
+    expect(stats.issued).toBeGreaterThan(0);
+    expect(stats.revoked).toBeGreaterThan(0);
+    expect(stats.active).toBeLessThan(stats.issued + 1);
+  });
 });
