@@ -299,3 +299,21 @@ Convergence and pivot arrive at times we do not control; they will eat into M5â€
 - **Status privacy:** the verifier downloads the whole list, so the issuer cannot tell which credential was checked.
 - **Key recovery:** holder key is non-exportable by design, so a lost phone means re-verification and re-issuance by the issuer plus revocation of the old credential. Issuer key leak means rotate, mark compromised on chain, re-issue.
 - **Secure context:** WebCrypto and the camera need HTTPS or localhost. This decides the phone-demo setup (Q2).
+
+## 12. Build log and defaults chosen (no need to re-decide)
+
+**Decisions from the owner (after approval):** solo coder; about 17 hours; local chain only, contract under ~100 lines; no hosting, one command to run; all three roles as browser windows on one laptop; scenario = City Library (name + photo + PNR), Nova Arena (age_over_18), Campus Store (is_student), one unregistered fake verifier (M3); verifier fetches the status list on a schedule and caches it, never per verification (M2).
+
+**M0 done.** Hardhat 3 worked inside the time box (no fallback needed). The `@owf/*` SD-JWT packages work.
+
+**M1 done.** Defaults I picked:
+- Plain Hono routes with Zod checks instead of `@hono/zod-openapi`: about half the code and easier to defend. The OpenAPI file will be written by hand in M6. `@scalar/hono-api-reference`, `vite-plugin-pwa`, `@yudiel/react-qr-scanner` and `@simplewebauthn/*` are not installed yet; each gets installed only when its milestone is reached.
+- Added `@vitejs/plugin-react` (the standard React plugin that `npm create vite` installs). It was not in the original list.
+- One verifier-api process hosts all three demo verifiers (table `verifiers`), to keep "one command". Audience binding still uses each verifier's own id.
+- A genuine credential that answers "No" to a requested yes/no claim is **denied** (`requirement_not_met`), not shown as verified.
+- `age_band` dropped; `is_student` and `age_over_18` are the derived claims.
+- Claim code: 8 characters, 10 minutes, one use. Request: 5 minutes. Presentation freshness: 5 minutes. Credential: 365 days.
+- Until M2, the issuer public key is published to `data/registry.json` (public keys only) as a stand-in for the chain.
+- Node runs the TypeScript files directly (built into Node 24), so there is no build step for the APIs.
+- QR codes contain a wallet link; on one laptop the "Open in wallet" button does the same job. Camera scanning waits for the phone demo.
+- Not in M1 on purpose: PIN, audit log, signed verifier requests, revocation, admin login for the issuer screen.

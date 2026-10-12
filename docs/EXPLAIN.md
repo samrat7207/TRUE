@@ -59,3 +59,49 @@ The verifier does download the status list file from a public issuer URL. That i
 1. **Unknown student refused** — a claim code cannot be created for a student id that is not in the database, and a made-up code gets no credential.
 2. **Reused claim code refused** — the first use returns a credential; the second use of the same code is refused.
 3. **Revoked student's credential fails verification** — verify succeeds, issuer revokes, the same credential now fails at the status check.
+
+
+---
+
+## M0 + M1: the first working loop
+
+### What exists now
+| Piece | Where | What it does |
+|---|---|---|
+| Brand | `packages/shared/src/brand.json` | The one place the name, full form and tagline live. Screens import it; `npm run brand` copies it into the Markdown headings |
+| Crypto wrapper | `packages/credentials/src/index.ts` | The only file that touches cryptography. It calls libraries; it implements none |
+| Issuer API | `services/issuer-api` (port 4001) | Student register, claim codes, signs credentials |
+| Verifier API | `services/verifier-api` (port 4002) | Creates requests with a nonce, checks presentations, stores results |
+| Wallet | `apps/wallet` (port 5173) | Holds the key and the credential, shows consent, sends only approved claims |
+| Issuer screen | `apps/issuer-web` (port 5174) | Student list, "Issue credential", QR offer |
+| Verifier screen | `apps/verifier-web` (port 5175) | Pick a verifier, show QR, live result |
+
+### The credential in one paragraph
+The issuer does not sign the claims directly. For each claim it makes a small packet `[random salt, claim name, value]`, hashes it, and signs the **list of hashes** together with the holder's public key. The wallet keeps all the packets. To reveal a claim, the wallet hands over that packet; the verifier hashes it and finds the hash in the signed list. Claims that are not revealed are only hashes of salted values, so they cannot be guessed. This format is called SD-JWT VC.
+
+### The three proofs the verifier gets
+1. **The issuer signed it**: the signature over the hash list verifies with the issuer's public key from the registry.
+2. **This wallet owns it**: the wallet signs a short note with its private key, and the matching public key is inside the signed credential. A copied credential is useless without the key, and the key cannot be exported from the browser.
+3. **It is fresh and for me**: that note contains the verifier's one-time nonce and the verifier's id. A different nonce or id fails.
+
+### How each attack fails (each one is a test in `tests/m1.test.ts`)
+| Attack | What stops it | Code returned |
+|---|---|---|
+| Change a disclosed value (false to true) | Its hash no longer matches the signed list | denied |
+| Credential signed by someone else's key | Signature does not verify with the registry key | `bad_signature` |
+| Send the same presentation again | Request is already answered; a new request has a new nonce | `request_already_answered` / `nonce_mismatch` |
+| Send a proof made for another verifier | The id inside the signed note is wrong | `wrong_audience` |
+| Present a copied credential with another key | The note is not signed by the key in the credential | denied |
+| Person not in the database asks for a credential | No student row, so no code | `unknown_student` / `unknown_code` |
+| Use a claim code twice | Code is marked used before signing | `code_used` |
+| Genuine credential that says "No" | Policy check: a requested yes/no claim must be Yes | `requirement_not_met` |
+
+### Why derived claims
+`is_student` and `age_over_18` are separate yes/no facts computed by the issuer when it signs. Nova Arena asks only for `age_over_18`, so the date of birth never leaves the wallet.
+
+### What is temporary in M1 (be ready to say this)
+- Issuer public key is read from `data/registry.json`, a stand-in for the chain. M2 moves it on-chain.
+- Verifier requests are not signed yet, so the wallet shows "verifier identity is not checked yet". M3 fixes this.
+- No revocation yet. The student row already stores a status-list index; M2 uses it.
+- The QR codes hold a link. On one laptop we click "Open in wallet" instead of scanning.
+- No PIN, no audit log, no admin login on the issuer screen yet.
