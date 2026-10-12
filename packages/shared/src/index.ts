@@ -7,7 +7,7 @@ export const BRAND = brand;
 // Where each piece runs on the demo laptop.
 export const URLS = {
   issuerApi: 'http://localhost:4001',
-  verifierApi: 'http://localhost:4002',
+  verifierApi: 'http://localhost:4000', // front door; forwards to instance 4002 or 4012
   wallet: 'http://localhost:5173',
   issuerWeb: 'http://localhost:5174',
   verifierWeb: 'http://localhost:5175',

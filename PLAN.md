@@ -317,3 +317,11 @@ Convergence and pivot arrive at times we do not control; they will eat into M5â€
 - Node runs the TypeScript files directly (built into Node 24), so there is no build step for the APIs.
 - QR codes contain a wallet link; on one laptop the "Open in wallet" button does the same job. Camera scanning waits for the phone demo.
 - Not in M1 on purpose: PIN, audit log, signed verifier requests, revocation, admin login for the issuer screen.
+
+**Convergence done (built alone, no other team's code or services).**
+- Verifier runs as two instances (4002, 4012) with separate database files, behind a front door on 4000 that health-checks every 2 seconds. `URLS.verifierApi` now points at 4000.
+- `/internal/sync` shares requests, revocation bits and audit events; protected by `INTERNAL_SYNC_KEY` from `.env` (see `.env.example`; a random key is made for the run if `.env` is missing).
+- Merge rules: revocation bits OR; requests by id, latest `updated_at` wins; audit events unique by id. Disclosed claims are never shared.
+- Verifier databases were renamed to `verifier-1.db` / `verifier-2.db` (new columns); the old `verifier.db` is unused.
+- Added a minimal verifier audit table and a status-bit store ahead of M2/M4 so the merge rules are real. Verification does not consult the status bits yet.
+- Verifier screen: instance status panel and Kill / Restart instance 1 button.

@@ -8,6 +8,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { URLS } from '@true/shared';
 import { verifyPresentation, randomToken, type Jwk } from '@true/credentials';
 import type { VerifierRow, RequestRow } from './db.ts';
+import {
+  addAuditEvent, exportState, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
+} from './sync.ts';
 
 const REQUEST_MINUTES = 5;
 
@@ -16,21 +19,82 @@ export type IssuerKeyLookup = (issuerId: string) => Promise<Jwk | null> | Jwk | 
 
 const refuse = (code: string, message: string) => ({ error: { code, message } });
 
-export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKeyLookup) {
+// Settings for running two instances that share state. All optional, so a single instance still works.
+export type InstanceOptions = {
+  instance?: string; // name shown in the status panel, e.g. "1"
+  internalKey?: string; // secret both instances know; protects /internal/*
+  sendToPeer?: (state: SharedState) => Promise<unknown>; // delivers changes to the other instance
+};
+
+export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKeyLookup, options: InstanceOptions = {}) {
   const app = new Hono();
   app.use('*', cors());
+  const instance = options.instance ?? '1';
+  let lastSyncedAt: number | null = null;
 
   const getVerifier = (id: string) => db.prepare('SELECT * FROM verifiers WHERE id = ?').get(id) as VerifierRow | undefined;
   const getRequest = (id: string) => db.prepare('SELECT * FROM requests WHERE id = ?').get(id) as RequestRow | undefined;
 
+  // Send a change to the other instance. If it is down we carry on; it catches up when it restarts.
+  async function share(state: SharedState) {
+    if (!options.sendToPeer) return;
+    try {
+      await options.sendToPeer(state);
+      lastSyncedAt = Date.now();
+    } catch { /* peer is down */ }
+  }
+
+  // Record an audit event and share the request's new state. No claim values are logged or shared.
+  async function recordAndShare(type: string, requestId: string) {
+    const event = { id: randomToken(), ts: new Date().toISOString(), type, request_id: requestId, instance };
+    addAuditEvent(db, event);
+    await share({ requests: [toShared(getRequest(requestId)!)], auditEvents: [event] });
+  }
+
   // Saves the final outcome. "AND state = 'pending'" means a request can be answered exactly once,
   // which is what makes a replayed presentation fail.
   function finish(id: string, state: 'verified' | 'denied', result: object): boolean {
-    const done = db.prepare("UPDATE requests SET state = ?, result_json = ? WHERE id = ? AND state = 'pending'").run(
-      state, JSON.stringify(result), id,
+    const done = db.prepare("UPDATE requests SET state = ?, result_json = ?, updated_at = ? WHERE id = ? AND state = 'pending'").run(
+      state, JSON.stringify(result), new Date().toISOString(), id,
     );
     return done.changes === 1;
   }
+
+  // ---------- instance health and state sharing ----------
+
+  app.get('/health', (c) => c.json({ instance, alive: true, lastSyncedAt }));
+
+  // Everything under /internal needs the shared secret. Only the other instance has it.
+  app.use('/internal/*', async (c, next) => {
+    if (!options.internalKey || c.req.header('x-internal-key') !== options.internalKey) {
+      return c.json(refuse('forbidden', 'Internal key missing or wrong'), 403);
+    }
+    await next();
+  });
+
+  // The other instance pushes its changes here. Safe to receive the same data twice.
+  app.post('/internal/sync', async (c) => {
+    mergeState(db, await c.req.json());
+    lastSyncedAt = Date.now();
+    return c.json({ ok: true });
+  });
+
+  // The other instance reads everything from here when it restarts.
+  app.get('/internal/state', (c) => c.json(exportState(db)));
+
+  // Mark a status-list position as revoked on this instance, then tell the other one.
+  // (Stand-in for the scheduled status-list download that arrives with M2.)
+  app.post('/internal/status/revoke', async (c) => {
+    const body = z.object({ index: z.number().int().min(0) }).safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json(refuse('bad_request', 'index is required'), 400);
+    setRevoked(db, body.data.index);
+    await share({ statusBitsHex: getStatusBits(db) });
+    return c.json({ ok: true });
+  });
+
+  app.get('/v1/status/:index', (c) => c.json({ index: Number(c.req.param('index')), revoked: isRevoked(db, Number(c.req.param('index'))) }));
+
+  app.get('/v1/audit/events', (c) => c.json({ events: db.prepare('SELECT * FROM audit_events ORDER BY ts').all() }));
 
   // The verifier screen lists who it can act as (three demo verifiers).
   app.get('/v1/verifiers', (c) => {
@@ -50,9 +114,10 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
     const id = randomToken();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + REQUEST_MINUTES * 60_000).toISOString();
-    db.prepare('INSERT INTO requests (id, verifier_id, claims_json, nonce, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-      id, verifier.id, verifier.allowed_claims_json, randomToken(), now.toISOString(), expiresAt,
+    db.prepare('INSERT INTO requests (id, verifier_id, claims_json, nonce, created_at, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      id, verifier.id, verifier.allowed_claims_json, randomToken(), now.toISOString(), expiresAt, now.toISOString(),
     );
+    await recordAndShare('request.created', id);
     const requestUri = `${URLS.verifierApi}/v1/requests/${id}/object`;
     // The QR code is a link that opens the wallet and tells it where to fetch the request.
     const walletUrl = `${URLS.wallet}/#/present?request_uri=${encodeURIComponent(requestUri)}`;
@@ -94,6 +159,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
 
     if (body.data.declined || !body.data.presentation) {
       finish(request.id, 'denied', { code: 'user_declined', message: 'The holder declined to share' });
+      await recordAndShare('consent.denied', request.id);
       return c.json({ state: 'denied', code: 'user_declined' });
     }
 
@@ -121,6 +187,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerPublicJwk: IssuerKe
     if (!finish(request.id, outcome.state, outcome.result)) {
       return c.json(refuse('request_already_answered', 'This request was already answered'), 409);
     }
+    await recordAndShare(outcome.state === 'verified' ? 'presentation.verified' : 'presentation.failed', request.id);
     return c.json({ state: outcome.state, ...outcome.result });
   });
 

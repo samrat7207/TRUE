@@ -53,6 +53,8 @@ export default function App() {
         ))}
       </div>
 
+      <InstancePanel />
+
       {active && check && (
         <div className="grid gap-6 md:grid-cols-2">
           <div className="rounded-xl bg-white p-5 text-center shadow">
@@ -65,6 +67,41 @@ export default function App() {
           <Result status={status} />
         </div>
       )}
+    </div>
+  );
+}
+
+type InstanceInfo = { name: string; port: number; alive: boolean; lastSyncedAt: number | null };
+
+// Status of the two verifier instances behind the front door, with a demo kill/restart button.
+function InstancePanel() {
+  const [info, setInfo] = useState<{ instances: InstanceInfo[]; now: number } | null>(null);
+
+  const refresh = () => fetch(URLS.verifierApi + '/proxy/status').then((r) => r.json()).then(setInfo).catch(() => setInfo(null));
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(refresh, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const act = (action: 'kill' | 'restart') => fetch(`${URLS.verifierApi}/proxy/${action}/1`, { method: 'POST' }).then(refresh);
+
+  if (!info) return <div className="mb-6 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">Front door (port 4000) is not reachable.</div>;
+  const first = info.instances[0];
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl bg-white p-3 text-sm shadow-sm">
+      {info.instances.map((i) => (
+        <div key={i.name} className={`rounded-lg border px-3 py-2 ${i.alive ? 'border-emerald-300 bg-emerald-50' : 'border-rose-300 bg-rose-50'}`}>
+          <div className="font-semibold">Instance {i.name} <span className="font-normal text-slate-500">:{i.port}</span> · {i.alive ? 'alive' : 'dead'}</div>
+          <div className="text-xs text-slate-500">
+            {i.lastSyncedAt ? `last synced ${Math.max(0, Math.round((info.now - i.lastSyncedAt) / 1000))} seconds ago` : 'not synced yet'}
+          </div>
+        </div>
+      ))}
+      <button onClick={() => act(first.alive ? 'kill' : 'restart')} className={`rounded-lg px-3 py-2 text-white ${first.alive ? 'bg-rose-600' : 'bg-emerald-600'}`}>
+        {first.alive ? 'Kill instance 1' : 'Restart instance 1'}
+      </button>
+      <span className="text-xs text-slate-500">All traffic goes through the front door on port 4000.</span>
     </div>
   );
 }

@@ -17,6 +17,7 @@ export type RequestRow = {
   state: 'pending' | 'verified' | 'denied' | 'expired';
   created_at: string;
   expires_at: string;
+  updated_at: string; // when the state last changed; used for "latest wins" when instances merge
   result_json: string | null;
 };
 
@@ -35,7 +36,21 @@ CREATE TABLE IF NOT EXISTS requests (
   state TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
   result_json TEXT
+);
+-- Cached revocation bits (one row). 1 = revoked.
+CREATE TABLE IF NOT EXISTS status_list (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bits_hex TEXT NOT NULL
+);
+-- What happened, without personal data: only ids, types and times.
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  type TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  instance TEXT NOT NULL
 );
 `;
 

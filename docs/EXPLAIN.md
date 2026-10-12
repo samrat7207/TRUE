@@ -105,3 +105,40 @@ The issuer does not sign the claims directly. For each claim it makes a small pa
 - No revocation yet. The student row already stores a status-list index; M2 uses it.
 - The QR codes hold a link. On one laptop we click "Open in wallet" instead of scanning.
 - No PIN, no audit log, no admin login on the issuer screen yet.
+
+
+---
+
+## Convergence: two verifier instances that survive one dying
+
+### The picture
+```
+wallet / verifier screen  ->  front door :4000  ->  instance 1 :4002 (verifier-1.db)
+                                                ->  instance 2 :4012 (verifier-2.db)
+                              instance 1  <-- /internal/sync -->  instance 2
+```
+Files: `services/verifier-api/src/proxy.ts` (front door), `sync.ts` (merge rules), `server.ts` (one instance).
+
+### How it works
+- **Front door** asks each instance `/health` every 2 seconds and forwards every call to one that is alive. If a forward fails, it tries the other instance straight away.
+- **Sharing:** after an instance creates a request, records a result, or gets new revocation bits, it POSTs the change to the other instance's `/internal/sync`. That endpoint needs the secret `INTERNAL_SYNC_KEY` from `.env`, and the front door refuses to forward anything under `/internal`.
+- **Catch-up:** when an instance starts, it reads the other one's full state once.
+
+### Merge rules (why repeats are harmless)
+| Data | Rule | Why |
+|---|---|---|
+| Revocation bits | bitwise OR | a revoked credential can never become valid again by merging |
+| Requests | same id: the newer `updated_at` wins; equal or older is ignored | a result replaces "pending", never the reverse |
+| Audit events | insert by id, ignore if already there | a union without duplicates |
+
+### What is NOT shared
+Disclosed claim values (name, photo, PNR) are removed before sending. The other instance learns "request X was verified", not what was shown. Consequence: if the instance that verified dies afterwards, the survivor reports Verified without the claim values.
+
+### Honest limits
+- Two instances on one laptop: this shows failover, not real distribution. There is no consensus protocol; two answers to the same request arriving on both instances in the same millisecond is not handled.
+- Revocation bits are stored, shared and merged, but the verification step does not read them until M2 puts a status index inside the credential.
+- After a restart the panel says "not synced yet" until the next change, even though catch-up happened.
+- Built by us; no other team's code or service is used.
+
+### Tests (`tests/convergence.test.ts`)
+Kill instance 1 mid-request then approve through instance 2 = verified; cross-instance replay refused; shared data has no claims; revocation on one appears on the other and survives merging old data; same events merged twice = no duplicates; sync without the key = 403.
