@@ -9,6 +9,10 @@ export type HistoryEntry = { at: string; verifierName: string; claims: string[];
 // Things the user can change on the Profile screen. Stored on the device like everything else.
 export type Settings = { holderName: string; issuerApi: string };
 
+// A request this holder sent to an issuer. id is the secret the app uses to collect the answer.
+// The date of birth typed on the form is sent once and NOT kept here.
+export type MyRequest = { id: string; type: string; pnr: string; createdAt: string; status: 'pending' | 'approved' | 'rejected'; note?: string };
+
 // Tests run in Node, which has no IndexedDB: they switch the store to a plain in-memory Map.
 let memory: Map<string, unknown> | null = null;
 export function useMemoryStorage(): void {
@@ -92,6 +96,9 @@ export async function addHistory(entry: HistoryEntry): Promise<void> {
   await set('history', [entry, ...(await getHistory())]);
 }
 
+export const getMyRequests = async () => (await get<MyRequest[]>('requests')) ?? [];
+export const saveMyRequests = (requests: MyRequest[]) => set('requests', requests);
+
 export const getSettings = async () => (await get<Partial<Settings>>('settings')) ?? {};
 
 export async function saveSettings(settings: Partial<Settings>): Promise<void> {
@@ -101,5 +108,5 @@ export async function saveSettings(settings: Partial<Settings>): Promise<void> {
 // "Reset wallet": forget the key, every card, the history and the settings.
 // The key cannot be recovered afterwards; credentials must be issued again.
 export async function resetWallet(): Promise<void> {
-  for (const key of ['holderKey', 'credentials', 'history', 'settings']) await set(key, undefined);
+  for (const key of ['holderKey', 'credentials', 'history', 'settings', 'requests']) await set(key, undefined);
 }

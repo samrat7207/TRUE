@@ -292,3 +292,19 @@ The "Verify" chip in the activity log is deliberately empty and says why: verifi
 
 ### Screens (all numbers computed from the database on each load)
 Staff PIN → Dashboard (issued / active / pending / revoked, recent activity) → Search (name, PNR or id) → Issue (type, valid from/till, department and batch read from the student record) → offer QR and link → Credential detail → Revoke (reason → confirm) → Registry with filter chips → Activity log → Signing keys → Reports (30 days: counts, trend line, type split) → Staff.
+
+
+## UI overhaul, phase 2B: the holder's Requests tab
+
+A holder can ask the institute for a credential from their phone instead of waiting for staff to start.
+
+1. **Holder** opens the Requests tab, picks a type, types their PNR and date of birth, and sends. The app gets back a long random request id that only it knows.
+2. **Issuer API** looks the PNR up and notes whether the date of birth matched. It stores "matched: yes/no", not the date that was typed. The reply to the holder is the same whether it matched or not, so the form cannot be used to guess details.
+3. **Staff** see it under More → Pending requests, by a short reference (`REQ-7`), with two badges: "PNR is in the database" and "Date of birth matches". A staff member with the issuer role (or an admin) approves or rejects. Approve is refused by the server unless both match.
+4. **On approval** the server creates a normal offer (registry row + claim code, valid for a day) and attaches the code to the request.
+5. **The holder's app** asks about its pending requests every few seconds, using its secret id. When it sees "approved" it claims the credential with that code by itself, and the request shows Approved · "Added to your wallet". Rejected shows Rejected.
+
+What staff and logs never see: the holder's secret request id. The audit log records `request.received`, `request.approved` and `request.rejected` with the `REQ-` reference and the staff id.
+
+**Demo limit (shown on both screens):** this is not identity proofing. Anyone who knows a student's PNR and date of birth could send the form and, once approved, collect that student's credential on their own phone. A real issuer would verify the person (in person or through an official identity service) before approving.
+Other limits: the app only polls while it is open in holder mode; the public form is capped at 30 requests a minute in total, not per sender.

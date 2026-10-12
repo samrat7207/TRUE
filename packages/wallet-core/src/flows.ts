@@ -6,7 +6,8 @@ import {
   type RequestCheck, type VerifierInfo,
 } from '@true/credentials';
 import {
-  addCredential, addHistory, getCredentials, getHolderKey, markRevoked, removeCredential, type StoredCredential,
+  addCredential, addHistory, getCredentials, getHolderKey, getMyRequests, markRevoked, removeCredential, saveMyRequests,
+  type MyRequest, type StoredCredential,
 } from './storage.ts';
 
 // How the wallet reaches servers. The browser passes window.fetch; tests pass a stand-in.
@@ -136,4 +137,45 @@ export async function answerRequest(input: {
 // A blocked request (unregistered or tampered) is never answered: we only note it in the history.
 export async function recordBlocked(claimedBy: string, reason: string): Promise<void> {
   await addHistory({ at: new Date().toISOString(), verifierName: claimedBy, claims: [], decision: 'declined', outcome: `blocked: ${reason}` });
+}
+
+// ---------- asking an issuer for a credential (Requests tab) ----------
+
+// Send a request to the issuer. Only the type, PNR and date of birth are sent; the date is not kept on the device.
+export async function submitCredentialRequest(input: { type: string; pnr: string; dob: string; issuerApi: string; fetch: Fetch }): Promise<MyRequest> {
+  const response = await input.fetch(`${input.issuerApi}/v1/credential-requests`, postJson({ type: input.type, pnr: input.pnr, dob: input.dob }));
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error.message);
+  const request: MyRequest = { id: body.requestId, type: input.type, pnr: input.pnr.trim().toUpperCase(), createdAt: new Date().toISOString(), status: 'pending' };
+  await saveMyRequests([request, ...(await getMyRequests())]);
+  return request;
+}
+
+// Ask the issuer about every request that is still pending. When one was approved, collect the
+// credential straight away with the claim code in the answer. Returns the up-to-date list.
+export async function refreshCredentialRequests(input: { issuerApi: string; fetch: Fetch }): Promise<MyRequest[]> {
+  const requests = await getMyRequests();
+  let changed = false;
+  for (const request of requests) {
+    if (request.status !== 'pending') continue;
+    const response = await input.fetch(`${input.issuerApi}/v1/credential-requests/${request.id}`).catch(() => null);
+    if (!response?.ok) continue; // issuer not reachable right now: try again next time
+    const answer = await response.json();
+    if (answer.status === 'rejected') {
+      request.status = 'rejected';
+      changed = true;
+    } else if (answer.status === 'approved') {
+      try {
+        await claimCredential({ code: answer.code, issuerApi: input.issuerApi, fetch: input.fetch });
+        request.status = 'approved';
+        request.note = 'Added to your wallet';
+      } catch (e) {
+        request.status = 'approved';
+        request.note = `Approved, but it could not be collected: ${e instanceof Error ? e.message : 'unknown error'}`;
+      }
+      changed = true;
+    }
+  }
+  if (changed) await saveMyRequests(requests);
+  return requests;
 }

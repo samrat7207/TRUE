@@ -6,15 +6,17 @@ import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  ISSUER_ID, ISSUER_NAME, CREDENTIAL_TYPE, CREDENTIAL_TYPES, STATUS_LIST_URL, URLS, setBit, createFailureLimiter,
+  ISSUER_ID, ISSUER_NAME, CREDENTIAL_TYPE, CREDENTIAL_TYPES, STATUS_LIST_URL, URLS, setBit, createFailureLimiter, createRateCounter,
 } from '@true/shared';
 import {
   issueCredential, verifyHolderProof, randomClaimCode, randomToken, generateSigningKeyPair, sha256Hex, type Jwk,
 } from '@true/credentials';
-import type { Student, ClaimCode, IssuerKeyRow, StaffRow, StaffRole, CredentialRow, AuditRow } from './db.ts';
+import type { Student, ClaimCode, IssuerKeyRow, StaffRow, StaffRole, CredentialRow, AuditRow, CredentialRequestRow } from './db.ts';
 import { hashPin, pinMatches } from './pin.ts';
 
 const CLAIM_CODE_MINUTES = 10;
+// An approved request's code lasts a day: the holder's app collects it by itself the next time it is open.
+const APPROVED_REQUEST_CODE_MINUTES = 24 * 60;
 const DEFAULT_VALID_DAYS = 365;
 const SESSION_MINUTES = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -369,13 +371,13 @@ export function createIssuerApp(db: DatabaseSync, firstKey: IssuerKeys, chain?: 
   });
 
   // Creates the registry entry and its one-time claim code. Returns a refusal object if the student may not be issued to.
-  function createOffer(input: { studentId: number; type: string; validFrom: string; validTill: string; staffId: string }) {
+  function createOffer(input: { studentId: number; type: string; validFrom: string; validTill: string; staffId: string; codeMinutes?: number }) {
     const student = db.prepare('SELECT * FROM students WHERE id = ?').get(input.studentId) as Student | undefined;
     if (!student) return { refusal: refuse('unknown_student', 'No such student in the issuer database'), status: 404 as const };
     if (student.status !== 'active') return { refusal: refuse('student_not_active', 'This student is revoked'), status: 409 as const };
 
     const code = randomClaimCode();
-    const expiresAt = new Date(now() + CLAIM_CODE_MINUTES * 60_000).toISOString();
+    const expiresAt = new Date(now() + (input.codeMinutes ?? CLAIM_CODE_MINUTES) * 60_000).toISOString();
     db.prepare('INSERT INTO claim_codes (code, student_id, nonce, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(code, student.id, randomToken(), isoNow(), expiresAt);
     const count = (db.prepare('SELECT COUNT(*) AS n FROM credentials').get() as { n: number }).n;
     const id = `TR-${input.type === 'LibraryCard' ? 'LIB' : 'SID'}-${String(count + 1).padStart(4, '0')}`;
@@ -416,6 +418,83 @@ export function createIssuerApp(db: DatabaseSync, firstKey: IssuerKeys, chain?: 
     const result = createOffer({ studentId: body.data.studentId, type: body.data.type, validFrom, validTill, staffId: c.get('staff').id });
     if ('refusal' in result) return c.json(result.refusal, result.status);
     return c.json(result.offer, 201);
+  });
+
+  // ====================================================================================
+  // Requests from holders ("please issue me an ID")
+  // ====================================================================================
+  // DEMO LIMIT: knowing a PNR and a date of birth is NOT identity proofing. A real issuer would check
+  // the person (in person, or through an official identity service) before approving.
+
+  // At most 30 new requests a minute in total, so the public form cannot flood the inbox.
+  const requestCounter = createRateCounter({ max: 30, windowSeconds: 60, now });
+
+  // Holder: ask for a credential. The reply never says whether the PNR or date matched (no guessing game).
+  app.post('/v1/credential-requests', async (c) => {
+    const body = z.object({
+      type: z.enum(Object.keys(CREDENTIAL_TYPES) as [string, ...string[]]),
+      pnr: z.string().trim().min(3).max(20),
+      dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    }).safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json(refuse('bad_request', 'type, pnr and dob (YYYY-MM-DD) are required'), 400);
+    const wait = requestCounter.hit('all');
+    if (wait > 0) return c.json(refuse('too_many_requests', `Too many requests, try again in ${wait} seconds`), 429);
+
+    const student = db.prepare('SELECT * FROM students WHERE pnr = ?').get(body.data.pnr.toUpperCase()) as Student | undefined;
+    // The request id is long and random; only the holder's app knows it, and it is how the app collects the answer.
+    const id = randomToken() + randomToken();
+    // We keep whether the typed date matched, not the typed date itself.
+    const dobMatches = student && student.dob === body.data.dob ? 1 : 0;
+    const inserted = db.prepare(`INSERT INTO credential_requests (id, type, pnr, student_id, dob_matches, status, created_at)
+                                 VALUES (?, ?, ?, ?, ?, 'pending', ?)`).run(id, body.data.type, body.data.pnr.toUpperCase(), student?.id ?? null, dobMatches, isoNow());
+    audit('request.received', null, `REQ-${inserted.lastInsertRowid}`);
+    return c.json({ requestId: id, status: 'pending' }, 201);
+  });
+
+  // Holder: poll for the answer with the secret request id. When approved, the claim code is included.
+  app.get('/v1/credential-requests/:id', (c) => {
+    const row = db.prepare('SELECT * FROM credential_requests WHERE id = ?').get(c.req.param('id')) as CredentialRequestRow | undefined;
+    if (!row) return c.json(refuse('unknown_request', 'No such request'), 404);
+    return c.json({ status: row.status, type: row.type, code: row.status === 'approved' ? row.claim_code : null });
+  });
+
+  // Staff see requests by a short reference (REQ-7), never by the holder's secret id.
+  type InboxRow = CredentialRequestRow & { rowid: number; student_name: string | null; student_status: string | null };
+  const INBOX_SQL = `SELECT r.rowid AS rowid, r.*, s.name AS student_name, s.status AS student_status
+    FROM credential_requests r LEFT JOIN students s ON s.id = r.student_id`;
+  const inboxView = (row: InboxRow) => ({
+    ref: `REQ-${row.rowid}`, type: row.type, pnr: row.pnr, status: row.status, createdAt: row.created_at, decidedBy: row.decided_by,
+    pnrFound: row.student_id !== null, dobMatches: row.dob_matches === 1, studentName: row.student_name, studentStatus: row.student_status,
+  });
+  const requestByRef = (ref: string) => db.prepare(`${INBOX_SQL} WHERE r.rowid = ?`).get(Number(ref.replace('REQ-', ''))) as InboxRow | undefined;
+
+  app.get('/v1/requests-inbox', staff(), (c) => {
+    const rows = db.prepare(`${INBOX_SQL} ORDER BY r.rowid DESC LIMIT 100`).all() as InboxRow[];
+    return c.json({ requests: rows.filter((r) => r.status === 'pending').map(inboxView), decided: rows.filter((r) => r.status !== 'pending').map(inboxView) });
+  });
+
+  // Approve: only when the PNR exists AND the date of birth matched. Creates the offer the holder's app then collects.
+  app.post('/v1/requests-inbox/:ref/approve', staff('issue'), (c) => {
+    const row = requestByRef(c.req.param('ref'));
+    if (!row) return c.json(refuse('unknown_request', 'No such request'), 404);
+    if (row.status !== 'pending') return c.json(refuse('already_decided', 'This request was already decided'), 409);
+    if (row.student_id === null) return c.json(refuse('pnr_not_found', 'No student has this PNR, so there is nobody to issue to'), 409);
+    if (!row.dob_matches) return c.json(refuse('dob_mismatch', 'The date of birth did not match our record: reject it'), 409);
+
+    const result = createOffer({ studentId: row.student_id, type: row.type, ...defaultValidity(), staffId: c.get('staff').id, codeMinutes: APPROVED_REQUEST_CODE_MINUTES });
+    if ('refusal' in result) return c.json(result.refusal, result.status);
+    db.prepare("UPDATE credential_requests SET status = 'approved', claim_code = ?, decided_at = ?, decided_by = ? WHERE id = ?").run(result.offer.code, isoNow(), c.get('staff').id, row.id);
+    audit('request.approved', c.get('staff').id, `REQ-${row.rowid}`);
+    return c.json({ ok: true, credentialId: result.offer.credentialId });
+  });
+
+  app.post('/v1/requests-inbox/:ref/reject', staff('issue'), (c) => {
+    const row = requestByRef(c.req.param('ref'));
+    if (!row) return c.json(refuse('unknown_request', 'No such request'), 404);
+    if (row.status !== 'pending') return c.json(refuse('already_decided', 'This request was already decided'), 409);
+    db.prepare("UPDATE credential_requests SET status = 'rejected', decided_at = ?, decided_by = ? WHERE id = ?").run(isoNow(), c.get('staff').id, row.id);
+    audit('request.rejected', c.get('staff').id, `REQ-${row.rowid}`);
+    return c.json({ ok: true });
   });
 
   // ====================================================================================

@@ -7,6 +7,7 @@ import { Home, CredentialDetail, Claim } from './screens/Home.tsx';
 import { Scan } from './screens/Scan.tsx';
 import { Present } from './screens/Present.tsx';
 import { Activity, Discover, Profile } from './screens/More.tsx';
+import { Requests, checkMyRequests } from './screens/Requests.tsx';
 
 // Reads the current route, e.g. "#/consent?request_uri=…" => path "/consent" plus its parameters.
 function useRoute() {
@@ -25,6 +26,16 @@ function useRoute() {
 
 export default function App() {
   const { path, params } = useRoute();
+  const holderMode = path !== '/' && !path.startsWith('/issuer');
+
+  // In holder mode, check on pending requests every 4 seconds wherever the holder is in the app,
+  // so an approved credential is collected without having to sit on the Requests tab.
+  useEffect(() => {
+    if (!holderMode) return;
+    const timer = setInterval(() => checkMyRequests().catch(() => {}), 4000);
+    return () => clearInterval(timer);
+  }, [holderMode]);
+
   switch (path) {
     case '/home': return <Home />;
     case '/credential': return <CredentialDetail id={params.get('id') ?? ''} />;
@@ -32,6 +43,7 @@ export default function App() {
     case '/scan': return <Scan />;
     // key: a new request address starts the consent flow from scratch.
     case '/consent': return <Present key={params.get('request_uri')} requestUri={params.get('request_uri') ?? ''} />;
+    case '/requests': return <Requests />;
     case '/activity': return <Activity />;
     case '/discover': return <Discover />;
     case '/profile': return <Profile />;

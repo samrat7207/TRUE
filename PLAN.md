@@ -346,3 +346,8 @@ Next phase: Issuer mode in the new app; then verifier screens; then retire the t
 **Phase 2A done: issuer mode in `apps/app`.** Staff table with roles and scrypt-hashed PINs, session tokens, PIN rate limit, permissions enforced on every issuer-api route, audit log with staff ids. New registry table (one row per credential, own revocation position each), Library Card type, validity dates. Screens: PIN, dashboard, search, issue with QR offer, credential detail, revoke with reason and confirm, registry, activity log, keys, reports, staff.
 Defaults chosen: admin can do everything (so one sign-in runs the old console too); revoker also gives back; pending counts only offers whose code is still valid; the "Verify" activity chip explains that the issuer never sees verifications instead of inventing events; the old issuer console got a PIN sign-in page so it keeps working; existing tests switch staff sign-in off explicitly (`staffAuth: 'off'`), the server never does.
 **Run `npm run reset` once after pulling this:** credentials issued before the registry existed are not in it.
+
+**Phase 2B done: holder Requests tab.** Holder asks for a Student ID or Library Card with PNR + date of birth; issuer staff see match flags and approve or reject; the holder's app polls its secret request id and collects an approved credential automatically.
+Defaults chosen: the server refuses approval unless PNR and date of birth both match; the typed date is not stored; the holder is not told whether details matched; approved claim codes last 24 hours.
+Not real identity proofing: documented on both screens and in docs/EXPLAIN.md.
+Next: verifier screens in the new app, then retire the three old apps.

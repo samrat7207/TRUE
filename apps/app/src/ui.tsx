@@ -36,6 +36,7 @@ export type Tab = { path: string; label: string; icon: string };
 export const HOLDER_TABS: Tab[] = [
   { path: '/home', label: 'Home', icon: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
   { path: '/scan', label: 'Scan', icon: 'M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 8h3v3H8zM13 13h3v3h-3z' },
+  { path: '/requests', label: 'Requests', icon: 'M4 5h16v11H9l-5 4zM8 9h8M8 12h5' },
   { path: '/activity', label: 'Activity', icon: 'M12 7v5l3 2M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9z' },
   { path: '/discover', label: 'Discover', icon: 'M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9zM15.5 8.5l-2 5-5 2 2-5z' },
 ];
@@ -53,7 +54,7 @@ export function BottomTabs({ active, tabs = HOLDER_TABS }: { active: string; tab
   return (
     <nav className="fixed bottom-0 left-1/2 flex w-full max-w-[390px] -translate-x-1/2 justify-around border-t border-line bg-surface/95 px-2 pb-3 pt-2 backdrop-blur">
       {tabs.map((tab) => (
-        <button key={tab.path} onClick={() => go(tab.path)} className={`flex w-16 flex-col items-center gap-1 text-tiny ${active === tab.path ? 'font-semibold text-ink' : 'text-muted'}`}>
+        <button key={tab.path} onClick={() => go(tab.path)} className={`flex w-14 flex-col items-center gap-1 text-tiny ${active === tab.path ? 'font-semibold text-ink' : 'text-muted'}`}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={active === tab.path ? 2.2 : 1.6} strokeLinecap="round" strokeLinejoin="round"><path d={tab.icon} /></svg>
           {tab.label}
         </button>
