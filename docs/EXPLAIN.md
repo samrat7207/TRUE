@@ -224,3 +224,4 @@ The issuer console has a **Give back** button on revoked students. A reason code
 - The old credential is **not** un-revoked. Its bit stays 1 for ever, because verifiers merge lists with OR and must never be able to "forget" a revocation.
 - The student becomes active again and a new claim code is opened. They collect a **new** credential, which gets a new position in the list. Old positions are kept in `retired_indexes` so they are never reused.
 - In the wallet, the new card replaces the old one for that student.
+- **Common mistake:** clicking Give back and then presenting the old card. It is still refused as Revoked, because giving back only makes the student eligible again. The student must claim the new credential. The wallet now greys out a revoked card and says so, and the issuer console shows "No credential collected yet" until the new one is claimed.

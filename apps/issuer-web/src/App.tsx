@@ -59,7 +59,7 @@ export default function App() {
     const { ok, body } = await post(`/v1/students/${student.id}/reinstate`, { reason: reinstateReasons[student.id] });
     if (!ok) return setMessage(`Refused: ${body.error.code}: ${body.error.message}`);
     await issue(student.id, student.name);
-    setMessage(`${student.name} reinstated (${body.reason}). The old credential stays revoked; a new claim code is ready on the right.`);
+    setMessage(`${student.name} reinstated (${body.reason}). NEXT STEP: the student must collect a NEW credential with the claim code on the right ("Open in wallet"). The old card in their wallet stays revoked and will keep being refused.`);
     reload();
   }
 
@@ -103,6 +103,7 @@ export default function App() {
                 <div className="min-w-0 flex-1">
                   <div className="font-medium">{s.name}</div>
                   <div className="text-xs text-slate-500">{s.pnr} · {s.class}-{s.section} · {s.branch}{s.status_list_index !== null && ` · list position ${s.status_list_index}`}</div>
+                  {s.status === 'active' && s.status_list_index === null && <div className="text-xs text-amber-700">No credential collected yet: click "Issue credential" and have the student claim it.</div>}
                 </div>
                 <span className={`rounded-full px-2 py-0.5 text-xs ${s.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
                   {s.status}{s.revoked_reason && `: ${s.revoked_reason}`}

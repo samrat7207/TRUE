@@ -4,7 +4,7 @@ import { BRAND, CLAIM_LABELS, ALL_CLAIMS, URLS } from '@true/shared';
 import { authenticateRequest, createHolderProof, createPresentation, readCredential, type RequestCheck } from '@true/credentials';
 import { createRegistryReader } from '@true/registry';
 import {
-  addCredential, addHistory, getCredentials, getHistory, getHolderKey, pickCredential, removeCredential,
+  addCredential, addHistory, getCredentials, getHistory, getHolderKey, markRevoked, pickCredential, removeCredential,
   type HistoryEntry, type StoredCredential,
 } from './storage.ts';
 
@@ -93,13 +93,21 @@ function Home() {
   );
 }
 
+const REVOKED_HELP = 'A revoked card can never work again. If the issuer has given your credential back, collect the NEW one with the new claim code; it replaces this card.';
+
 function Card({ stored, onRemove }: { stored: StoredCredential; onRemove: () => void }) {
   const [claims, setClaims] = useState<Record<string, unknown> | null>(null);
   const [open, setOpen] = useState(false);
   useEffect(() => { readCredential(stored.credential).then(setClaims); }, [stored.credential]);
   if (!claims) return null;
   return (
-    <div className="rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-700 p-4 text-white shadow">
+    <div className={`rounded-2xl bg-gradient-to-br p-4 text-white shadow ${stored.revoked ? 'from-slate-500 to-slate-700' : 'from-indigo-600 to-violet-700'}`}>
+      {stored.revoked && (
+        <div className="mb-3 rounded-lg bg-rose-600 p-2 text-xs">
+          <b>REVOKED by the issuer.</b> {REVOKED_HELP}{' '}
+          <a href="#/claim" className="underline">Add it with a claim code</a>
+        </div>
+      )}
       <div className="flex items-center gap-3">
         <img src={String(claims.photo)} alt="" className="h-14 w-14 rounded-lg" />
         <div className="min-w-0">
@@ -229,8 +237,11 @@ function Present({ requestUri }: { requestUri: string }) {
     const response = await fetch(request.responseUri, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const result = await response.json();
     const outcome = response.ok ? result.state : result.error.code;
+    const wasRevoked = approve && result.code === 'revoked';
+    if (wasRevoked) await markRevoked(stored.id);
     await addHistory({ at: new Date().toISOString(), verifierName: check.verifierName, claims: request.claims, decision: approve ? 'shared' : 'declined', outcome });
-    setMessage(approve ? (outcome === 'verified' ? 'Shared. The verifier accepted your proof.' : `The verifier did not accept it (${result.code ?? result.error?.message ?? outcome}).`) : 'You declined. Nothing was shared.');
+    if (wasRevoked) setMessage('The issuer has revoked this card. ' + REVOKED_HELP);
+    else setMessage(approve ? (outcome === 'verified' ? 'Shared. The verifier accepted your proof.' : `The verifier did not accept it (${result.code ?? result.error?.message ?? outcome}).`) : 'You declined. Nothing was shared.');
     setStatus('done');
   }
 
@@ -275,6 +286,13 @@ function Present({ requestUri }: { requestUri: string }) {
         <div className="text-sm text-slate-600">Purpose: {request.purpose}</div>
         <div className="mt-2 rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-800">✓ Verified verifier: signed request matches the key in the on-chain registry.</div>
       </div>
+
+      {stored?.revoked && (
+        <div className="rounded-xl border-2 border-rose-500 bg-rose-50 p-4 text-sm text-rose-900">
+          <b>Your card was revoked by the issuer</b>, so this verifier will refuse it. {REVOKED_HELP}{' '}
+          <a href="#/claim" className="font-semibold underline">Add the new credential</a>
+        </div>
+      )}
 
       {overAsking && (
         <div className="rounded-xl border-2 border-amber-500 bg-amber-50 p-4 text-amber-900">

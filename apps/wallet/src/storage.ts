@@ -3,7 +3,8 @@
 import { generateHolderKey, type Jwk } from '@true/credentials';
 
 export type HolderKey = { privateKey: CryptoKey; publicJwk: Jwk };
-export type StoredCredential = { id: string; credential: string; issuerName: string; addedAt: string };
+// revoked: set when a verifier told us the issuer has cancelled this card.
+export type StoredCredential = { id: string; credential: string; issuerName: string; addedAt: string; revoked?: boolean };
 export type HistoryEntry = { at: string; verifierName: string; claims: string[]; decision: 'shared' | 'declined'; outcome: string };
 
 // One simple key-value store.
@@ -57,6 +58,11 @@ export async function addCredential(credential: string, issuerName: string): Pro
 // presented instead of a freshly issued one.)
 export function pickCredential<T extends { addedAt: string }>(cards: T[]): T | undefined {
   return [...cards].sort((a, b) => b.addedAt.localeCompare(a.addedAt))[0];
+}
+
+// Remember that the issuer has revoked this card, so the wallet can show it.
+export async function markRevoked(id: string): Promise<void> {
+  await set('credentials', (await getCredentials()).map((c) => (c.id === id ? { ...c, revoked: true } : c)));
 }
 
 export async function removeCredential(id: string): Promise<void> {
