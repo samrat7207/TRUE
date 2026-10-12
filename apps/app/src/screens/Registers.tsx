@@ -10,18 +10,42 @@ import { STEP_LABELS, registry } from '../wallet.ts';
 export type Register = { id: string; name: string; purpose: string; issuerId: string; issuerName: string; type: string; fields: string[] };
 
 // Call the verifier front door as the logged-in person. Returns the response so callers can read headers too.
+// Gives up after 10 seconds instead of waiting for ever.
 export async function verifierCall(path: string, body?: unknown): Promise<Response> {
   return fetch(URLS.verifierApi + path, {
     method: body === undefined ? 'GET' : 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${getSession()?.token ?? ''}` },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   });
+}
+
+// The same call, turned into a result a screen can always show: the data, or an error with its status code.
+// It never throws and never hangs: no answer, a timeout and an unreadable answer all become an error.
+export type CallResult<T> = { ok: true; data: T; servedBy: string | null } | { ok: false; status: number | null; message: string };
+export async function verifierJson<T>(path: string, body?: unknown): Promise<CallResult<T>> {
+  let response: Response;
+  try {
+    response = await verifierCall(path, body);
+  } catch (e) {
+    const timedOut = e instanceof DOMException && e.name === 'TimeoutError';
+    return { ok: false, status: null, message: timedOut ? 'No answer from the verifier after 10 seconds.' : 'The verifier is not reachable.' };
+  }
+  const data = await response.json().catch(() => null);
+  if (response.ok && data) return { ok: true, data, servedBy: response.headers.get('X-Served-By') };
+  const fallback = response.status === 404
+    ? 'The verifier servers do not have this feature. They are probably running older code than the app: stop and restart "npm run dev".'
+    : 'The verifier sent an answer the app could not read.';
+  return { ok: false, status: response.status, message: data?.error?.message ?? fallback };
 }
 
 function useRegisters() {
   const [registers, setRegisters] = useState<Register[] | null>(null);
   const [error, setError] = useState('');
-  const reload = () => verifierCall('/v1/registers').then((r) => r.json()).then((b) => (b.registers ? setRegisters(b.registers) : setError(b.error?.message ?? 'Could not load'))).catch(() => setError('The verifier is not reachable'));
+  const reload = async () => {
+    const result = await verifierJson<{ registers: Register[] }>('/v1/registers');
+    if (result.ok) { setRegisters(result.data.registers); setError(''); } else setError(`${result.message}${result.status ? ` (status ${result.status})` : ''}`);
+  };
   useEffect(() => { reload(); }, []);
   return { registers, error, reload };
 }
@@ -78,9 +102,8 @@ export function NewRegister() {
   async function create() {
     setError('');
     const issuerName = institutions?.find((i) => i.id === issuerId)?.name ?? '';
-    const response = await verifierCall('/v1/registers', { name, purpose, issuerId, issuerName, type, fields });
-    const body = await response.json();
-    if (!response.ok) return setError(body.error.message);
+    const result = await verifierJson('/v1/registers', { name, purpose, issuerId, issuerName, type, fields });
+    if (!result.ok) return setError(`${result.message}${result.status ? ` (status ${result.status})` : ''}`);
     go('/registers');
   }
 
@@ -139,10 +162,9 @@ export function RegisterCheck({ id }: { id: string }) {
   // A FRESH request every time: new nonce, valid for 2 minutes, asking for the register's stored fields.
   async function fresh() {
     setStatus(null); setError(''); setCopied(false);
-    const response = await verifierCall(`/v1/registers/${id}/requests`, {});
-    const body = await response.json();
-    if (!response.ok) { setCheck(null); return setError(body.error.message); }
-    setCheck(body);
+    const result = await verifierJson<Check>(`/v1/registers/${id}/requests`, {});
+    if (!result.ok) { setCheck(null); return setError(`${result.message}${result.status ? ` (status ${result.status})` : ''}`); }
+    setCheck(result.data);
   }
   useEffect(() => { fresh(); }, [id]);
 

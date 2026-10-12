@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { CLAIM_LABELS, templateLabel } from '@true/shared';
 import { Avatar, Badge, Card, Chips, Field, PillButton, Screen, TopBar, go } from '../ui.tsx';
-import { verifierCall, type Register } from './Registers.tsx';
+import { verifierJson, type Register } from './Registers.tsx';
 
 type Visitor = {
   credentialId: string; name: string; visits: number; firstVerifiedAt: string; lastVerifiedAt: string;
@@ -21,25 +21,43 @@ const when = (iso: string) => new Date(iso).toLocaleString(undefined, { day: 'nu
 
 export function RegisterVisitors({ id }: { id: string }) {
   const [list, setList] = useState<VisitorList | null>(null);
-  const [error, setError] = useState('');
+  // Why the last load failed, with the HTTP status when there was one. null = the last load worked.
+  const [failure, setFailure] = useState<{ status: number | null; message: string } | null>(null);
+  const [attempt, setAttempt] = useState(0); // "Retry" bumps this to load again at once
   const [filter, setFilter] = useState<keyof typeof FILTERS>('all');
   const [open, setOpen] = useState(''); // credential id of the visitor whose details are shown
 
   // Refreshed every 3 seconds, so a revocation shows up here soon after the verifier learns of it.
+  // Every load ends in exactly one of two states: a list, or a failure with a reason. It can never stay "loading":
+  // verifierJson gives up after 10 seconds and turns every kind of problem into a failure.
   useEffect(() => {
+    let current = true;
     const load = async () => {
-      const response = await verifierCall(`/v1/registers/${id}/visits`).catch(() => null);
-      if (!response) return;
-      const body = await response.json();
-      if (response.ok) { setList(body); setError(''); } else setError(body.error.message);
+      const result = await verifierJson<VisitorList>(`/v1/registers/${id}/visits`);
+      if (!current) return;
+      if (result.ok) { setList(result.data); setFailure(null); } else setFailure({ status: result.status, message: result.message });
     };
     load();
     const timer = setInterval(load, 3000);
-    return () => clearInterval(timer);
-  }, [id]);
+    return () => { current = false; clearInterval(timer); };
+  }, [id, attempt]);
 
-  if (error) return <Screen><TopBar back="/registers" /><Card tone="bad"><span className="text-small text-bad">{error}</span></Card></Screen>;
-  if (!list) return <Screen><TopBar back="/registers" /><p className="text-small text-muted">Loading…</p></Screen>;
+  const failureCard = failure && (
+    <Card tone="bad" className="mb-4">
+      <div className="font-semibold text-bad">Could not load the visitor list{failure.status ? ` (status ${failure.status})` : ''}</div>
+      <p className="mt-1 mb-3 text-small">{failure.message}</p>
+      <PillButton kind="secondary" onClick={() => { setFailure(null); setAttempt(attempt + 1); }}>Retry</PillButton>
+    </Card>
+  );
+  // Nothing loaded yet: either still waiting for the first answer (at most 10 seconds), or it failed.
+  if (!list) {
+    return (
+      <Screen>
+        <TopBar back="/registers" />
+        {failureCard ?? <p className="text-small text-muted">Loading the visitor list…</p>}
+      </Screen>
+    );
+  }
 
   // ---------- one visitor ----------
   const visitor = list.visitors.find((v) => v.credentialId === open);
@@ -83,6 +101,8 @@ export function RegisterVisitors({ id }: { id: string }) {
   return (
     <Screen>
       <TopBar back="/registers" title={list.register.name} />
+      {/* A later refresh failed: keep showing the last list we have, and say so. */}
+      {failureCard}
       <p className="mb-3 text-center text-small text-muted">{templateLabel(list.register.type)} from {list.register.issuerName}</p>
       <div className="mb-4"><PillButton onClick={() => go(`/register?id=${id}`)}>Show QR to check someone</PillButton></div>
 
@@ -95,7 +115,7 @@ export function RegisterVisitors({ id }: { id: string }) {
       )}
       <Chips options={FILTERS} value={filter} onChange={setFilter} />
       <div className="space-y-2">
-        {shown.length === 0 && <Card><span className="text-small text-muted">{list.visitors.length === 0 ? 'Nobody has been verified through this register yet.' : 'Nobody matches this filter.'}</span></Card>}
+        {shown.length === 0 && <Card><span className="text-small text-muted">{list.visitors.length === 0 ? 'No visits yet. Show the QR to check someone.' : 'Nobody matches this filter.'}</span></Card>}
         {shown.map((v) => (
           <Card key={v.credentialId} onClick={() => setOpen(v.credentialId)}>
             <div className="flex items-center gap-3">

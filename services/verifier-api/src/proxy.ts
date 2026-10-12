@@ -2,7 +2,7 @@
 // This file does the "real world" part: it starts the verifier instances as processes, checks their
 // health every 2 seconds, and gives the front door logic (frontdoor.ts) a way to reach each one.
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, watch } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { getConnInfo } from '@hono/node-server/conninfo';
@@ -89,6 +89,27 @@ const app = createFrontDoor({
 });
 
 backends.forEach((backend) => start(backend.name));
+
+// Development convenience: when the verifier's code (or a shared package) changes on disk, restart the instances
+// so they never keep serving old code. Their data is in their database files, so nothing is lost.
+// (This file itself is not reloaded: after changing proxy.ts or frontdoor.ts, restart "npm run dev".)
+let restartTimer: ReturnType<typeof setTimeout> | undefined;
+function restartInstancesSoon(changed: string | null) {
+  if (changed && !/\.(ts|json)$/.test(changed)) return; // ignore database files and editor temp files
+  clearTimeout(restartTimer);
+  restartTimer = setTimeout(() => {
+    console.log('Code changed: restarting the verifier instances');
+    for (const backend of backends) {
+      const child = children.get(backend.name);
+      if (!child) { start(backend.name); continue; }
+      child.once('exit', () => start(backend.name));
+      kill(backend.name);
+    }
+  }, 500);
+}
+for (const folder of ['./', '../../../packages/']) {
+  watch(fileURLToPath(new URL(folder, import.meta.url)), { recursive: true }, (_event, file) => restartInstancesSoon(file));
+}
 serve({ fetch: app.fetch, port: FRONT_PORT }, () => console.log(`Verifier front door on http://localhost:${FRONT_PORT} with ${COUNT} instances`));
 
 // Stop the instances when the front door stops.

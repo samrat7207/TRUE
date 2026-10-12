@@ -14,6 +14,8 @@ import {
 } from './sync.ts';
 
 const REQUEST_MINUTES = 5;
+// What this build of the verifier can do. The app compares it with what it needs, to detect servers running older code.
+export const FEATURES = ['registers', 'visits'];
 const REGISTER_REQUEST_MINUTES = 2; // a register's QR is fresh every time and short-lived
 
 // Looks up an issuer key (public key + state) in the chain registry. Null if it is not there.
@@ -36,6 +38,7 @@ export type InstanceOptions = {
 export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLookup, options: InstanceOptions = {}) {
   const app = new Hono();
   app.use('*', cors());
+  app.notFound((c) => c.json(refuse('unknown_route', 'This verifier server does not have that address. If the app is newer than the server, restart "npm run dev".'), 404));
   const instance = options.instance ?? '1';
   let lastSyncedAt: number | null = options.syncedAtStart ? Date.now() : null;
 
@@ -83,7 +86,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
   });
 
   app.get('/health', (c) =>
-    c.json({ instance, alive: true, lastSyncedAt, served, failures, uptimeSeconds: Math.round((Date.now() - startedAt) / 1000) }),
+    c.json({ instance, alive: true, lastSyncedAt, served, failures, uptimeSeconds: Math.round((Date.now() - startedAt) / 1000), features: FEATURES }),
   );
 
   // Everything under /internal needs the shared secret. Only the other instance has it.

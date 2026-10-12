@@ -399,3 +399,5 @@ Registers in the person app: pinned institution + credential type + fields, own 
 - Denied attempts store only a reason code and a time per register, nothing about the person.
 - Only the owner can read a register's visitors (403 otherwise). Deleting a register deletes its visits on every instance. Rows older than `VISIT_RETENTION_DAYS` (default 30) are deleted when the list is read.
 - The consent screen tells the holder that the owner keeps these details and for how long.
+
+**Bug fixed: visitor list stuck on "Loading".** Cause: the verifier front door and its three instances were still running code from before the visitor list existed (only the core API reloads itself), so the route answered a plain-text 404 that the app could not read and kept waiting. Fixes: the screen now always ends in a list, an empty state or an error with Retry and the status code (10-second timeout); unknown addresses answer JSON; the front door restarts its instances when verifier or shared code changes; `/health` lists the features a running instance has.

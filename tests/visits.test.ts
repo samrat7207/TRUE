@@ -103,3 +103,46 @@ describe('visitor list', () => {
     for (const personal of ['Aarav', 'B+', 'AIT2023001', wrong.institution.id]) expect(stored).not.toContain(personal);
   });
 });
+
+describe('through the front door', () => {
+  it('a verification via a register creates a visit the owner can list, with live status', async () => {
+    const { createFrontDoor } = await import('../services/verifier-api/src/frontdoor.ts');
+    const { URLS } = await import('@true/shared');
+    const { sha256Hex } = await import('@true/credentials');
+    // The front door over our one instance, exactly as the app reaches it: only content-type and the session token get through.
+    const door = createFrontDoor({
+      backends: [{ name: '1', port: 0, alive: true, health: {}, forward: async (path, init) => w.verifier.request(path, init) }],
+      getSource: () => 'phone', hashSource: (text) => sha256Hex(text).slice(0, 16),
+    });
+    const viaDoor = async (url: string, init?: object) => {
+      const { pathname, search } = new URL(url);
+      return url.startsWith(URLS.coreApi) ? w.core.request(pathname + search, init) : door.request(pathname + search, init);
+    };
+
+    const { id, card, institution } = await w.issueTo('aarav@test.true');
+    const created = await door.request(`/v1/registers/${registerId}/requests`, json({}, owner));
+    expect(created.status).toBe(201);
+    const { requestUri } = await created.json();
+    const request = await loadRequest({ requestUri, fetch: viaDoor, getVerifier: (verifierId) => w.verifierRegistry.get(verifierId) ?? null });
+    if (request.status !== 'verified') throw new Error('request not authenticated');
+    expect((await answerRequest({ check: request, stored: card, approve: true, fetch: viaDoor })).state).toBe('verified');
+
+    const listed = await door.request(`/v1/registers/${registerId}/visits`, auth(owner));
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get('X-Served-By')).toBe('instance 1');
+    const list = await listed.json();
+    expect(list.visitors).toHaveLength(1);
+    expect(list.visitors[0]).toMatchObject({ name: 'Aarav Deshmukh', visits: 1, status: 'valid', fields: { name: 'Aarav Deshmukh', blood_group: 'B+' } });
+
+    // Live status: after the institution revokes and the verifier refreshes, the same visit reads Revoked.
+    await w.core.request(`/v1/institution/credentials/${id}/revoke`, json({ reason: 'lost' }, institution.token));
+    await w.refreshRevocations();
+    expect((await (await door.request(`/v1/registers/${registerId}/visits`, auth(owner))).json()).visitors[0].status).toBe('revoked');
+
+    // No token, and an address the server does not have, both come back as readable JSON errors (never plain text).
+    expect((await door.request(`/v1/registers/${registerId}/visits`)).status).toBe(401);
+    const unknown = await door.request('/v1/registers/x/no-such-thing', auth(owner));
+    expect(unknown.status).toBe(404);
+    expect((await unknown.json()).error.code).toBe('unknown_route');
+  });
+});
