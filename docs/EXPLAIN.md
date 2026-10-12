@@ -225,3 +225,36 @@ The issuer console has a **Give back** button on revoked students. A reason code
 - The student becomes active again and a new claim code is opened. They collect a **new** credential, which gets a new position in the list. Old positions are kept in `retired_indexes` so they are never reused.
 - In the wallet, the new card replaces the old one for that student.
 - **Common mistake:** clicking Give back and then presenting the old card. It is still refused as Revoked, because giving back only makes the student eligible again. The student must claim the new credential. The wallet now greys out a revoked card and says so, and the issuer console shows "No credential collected yet" until the new one is claimed.
+
+
+---
+
+## UI overhaul, phase 1: the new app (`apps/app`)
+
+One mobile-first app (390px wide) that will replace the three old screens. Phase 1 has the role picker and **General (holder) mode**. The old wallet, issuer console and verifier page still run unchanged.
+
+### How it is put together
+| Piece | Where | What it is |
+|---|---|---|
+| Design tokens | `apps/app/src/index.css` | Colours, radius and type from the design sheets, as CSS variables that Tailwind turns into classes |
+| Components | `apps/app/src/ui.tsx` | Screen, TopBar, BottomTabs, Card, PillButton, Badge, ConsentRow, StepList, QrPanel, Avatar, plus the splash blob (SVG gradients, no image file) |
+| Wallet logic | `packages/wallet-core` | The same storage file the old wallet used (moved, not rewritten) plus the claim and present flows with no UI in them |
+| Screens | `apps/app/src/screens` | Role picker, Home, credential detail, Claim, Scan, consent → verifying → result, Activity, Discover, Profile |
+
+### Rules the screens follow
+- **Nothing on screen is made up.** Names, dates, counts, key ids and check results come from the stored credential, the chain registry or the verifier's reply.
+- **No photos.** Avatars are initials on a solid colour. The photo claim can still be shared with a verifier that is registered for it, but this app never draws it.
+- **"Verified" on a card** means the wallet itself checked the issuer's signature against the key in the on-chain registry (`inspectCredential`), the key is not Compromised, and no verifier has reported the card revoked.
+- **Consent screen:** the verifier's name is shown only after its signed request passed the registry check. Requested items are ticked and locked (the verifier needs all of them: share or decline). Everything else is listed under "Not required". Unregistered or tampered requests get a red screen with only Close. Over-asking turns Share off and says which item is not allowed.
+
+### The Verifying screen shows real checks
+The verifier's reply now carries `steps`: seven named checks, each `pass`, `fail` or `skipped`, plus the issuer key id and the time (`services/verifier-api/src/steps.ts`). No claim values are in it.
+- Steps before the failing one passed; the failing one failed; later ones were not reached and are shown as "not checked", never as passed.
+- Honest detail: the SD-JWT library checks holder binding, audience and freshness together and reports the first problem only. So when freshness fails, the holder/audience line shows "not checked".
+- The verifier answers in one reply. The app reveals the lines one at a time so they can be read; the results are real, only the pacing is cosmetic.
+
+### Honest limits of phase 1
+- The new app runs on its own address (port 5176), so it has its **own empty wallet**; cards in the old wallet do not appear in it.
+- Camera scanning uses the browser's built-in QR reader, which Chrome on Windows does not have. There the Scan tab says so and offers the paste box.
+- "Share specific info" on a credential opens the Scan tab: a proof always answers a verifier's request, so there is nothing to share without one.
+- Issuer mode is a placeholder. Requests tab is hidden. Discover has one "not available" card.

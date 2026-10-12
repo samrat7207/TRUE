@@ -23,6 +23,7 @@ Then open three browser windows:
 
 | Window | Address |
 |---|---|
+| New app (mobile-first, phase 1: holder mode) | http://localhost:5176 |
 | Issuer console | http://localhost:5174 |
 | Wallet | http://localhost:5173 |
 | Verifier | http://localhost:5175 |
@@ -38,7 +39,9 @@ Optional settings go in `.env` (see `.env.example`).
 - `packages/shared`: product name, addresses, claim names
 - `packages/credentials`: the only place that touches cryptography (a wrapper over libraries, no custom crypto)
 - `services/issuer-api`, `services/verifier-api`: two separate APIs with separate SQLite databases
-- `apps/wallet`, `apps/issuer-web`, `apps/verifier-web`: the three screens
+- `packages/wallet-core`: wallet storage and claim/present flows shared by the wallet apps
+- `apps/app`: the new mobile-first app (role picker + holder mode so far)
+- `apps/wallet`, `apps/issuer-web`, `apps/verifier-web`: the original three screens, kept until the new app reaches parity
 - `packages/registry`: reads and writes the on-chain TrustRegistry (viem)
 - `contracts`: the TrustRegistry contract and its tests (Hardhat)
 - `docs/EXPLAIN.md`: plain-language explanation of every part

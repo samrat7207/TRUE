@@ -338,3 +338,7 @@ Defaults chosen: plain hex bit list anchored by hash (not the IETF token format,
 **Load test done.** Button on the verifier page, separate bucket, per-instance counters, cleanup with one audit summary line.
 
 **Still not built:** PIN / WebAuthn step-up, hash-chained audit log with chain anchor, wallet PWA install, camera QR scanning, issuer admin login, hand-written OpenAPI file, partner API key.
+
+**UI overhaul phase 1 done.** New mobile-first app `apps/app` (port 5176): design tokens and components from `docs/design`, role picker, and General mode wired to the real wallet logic. Wallet storage and flows moved to `packages/wallet-core` (old wallet re-exports it, behaviour unchanged). Verifier replies now include per-step results. Old apps kept.
+Defaults chosen: requested items on the consent screen are locked (share all or decline); camera scan uses the built-in BarcodeDetector with a paste fallback, so no new library; "backend address" is the issuer API address; the splash and the role picker are one screen.
+Next phase: Issuer mode in the new app; then verifier screens; then retire the three old apps.

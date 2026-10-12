@@ -48,5 +48,6 @@ start('verifier-api', 'npm run dev -w @true/verifier-api', 3);
 start('wallet      ', 'npm run dev -w @true/wallet', 4);
 start('issuer-web  ', 'npm run dev -w @true/issuer-web', 5);
 start('verifier-web', 'npm run dev -w @true/verifier-web', 6);
+start('app         ', 'npm run dev -w @true/app', 7);
 
-console.log('\nWallet        http://localhost:5173\nIssuer admin  http://localhost:5174\nVerifier      http://localhost:5175\n');
+console.log('\nNew app       http://localhost:5176   (mobile-first: use Chrome Device Toolbar at 390px)\nWallet        http://localhost:5173\nIssuer admin  http://localhost:5174\nVerifier      http://localhost:5175\n');

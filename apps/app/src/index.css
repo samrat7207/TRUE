@@ -1,0 +1,59 @@
+@import 'tailwindcss';
+
+/* Design tokens, taken from docs/design. Tailwind turns each one into utility classes
+   (for example --color-cream gives bg-cream and text-cream) and a CSS variable. */
+@theme {
+  /* colours */
+  --color-cream: #f4f2ec; /* page background */
+  --color-surface: #ffffff; /* cards */
+  --color-soft: #faf9f5; /* inset rows, inputs */
+  --color-line: #e8e5dd; /* hairline borders */
+  --color-ink: #0b0b0c; /* text, black pill buttons */
+  --color-muted: #6b6b70; /* secondary text */
+  --color-ok: #15803d;
+  --color-ok-soft: #e6f5ea;
+  --color-warn: #b45309;
+  --color-warn-soft: #fdf1df;
+  --color-bad: #dc2626;
+  --color-bad-soft: #fdeaea;
+  --color-accent: #2f6bff;
+  --color-accent-soft: #eaf0ff;
+
+  /* radius */
+  --radius-card: 20px;
+  --radius-row: 14px;
+  --radius-pill: 999px;
+
+  /* type */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --text-title: 26px; /* screen titles */
+  --text-body: 15px;
+  --text-small: 13px;
+  --text-tiny: 11px;
+
+  /* spacing: one step = 4px (Tailwind default), screen gutter = 20px */
+  --spacing-gutter: 20px;
+}
+
+html,
+body {
+  background: #e4e1d8; /* around the phone on a desktop screen */
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Soft pulsing ring used on the Verifying screen. */
+@keyframes pulse-ring {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.06); opacity: 0.6; }
+}
+.pulse-ring { animation: pulse-ring 1.6s ease-in-out infinite; }
+
+/* Slow drift for the splash blob. */
+@keyframes drift {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-8px) rotate(3deg); }
+}
+.drift { animation: drift 7s ease-in-out infinite; }
