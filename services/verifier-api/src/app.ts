@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { LOAD_TEST_VERIFIER_ID, URLS } from '@true/shared';
 import { verifyPresentation, signRequest, randomToken, type IssuerKeyInfo, type Jwk } from '@true/credentials';
 import type { VerifierRow, RequestRow } from './db.ts';
+import { buildSteps } from './steps.ts';
 import {
   addAuditEvent, deleteLoadTestRequests, exportState, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
 } from './sync.ts';
@@ -221,6 +222,11 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     } else {
       outcome = { state: 'verified', result: { issuer: result.issuer, claims: result.claims } };
     }
+
+    // Add what the wallet shows on its "Verifying" and "Cryptographic details" screens:
+    // one line per check, which issuer key signed, and when we checked. None of it is personal data.
+    const failureCode = outcome.state === 'verified' ? null : (outcome.result as { code: string }).code;
+    outcome.result = { ...outcome.result, steps: buildSteps(failureCode), keyId: result.keyId ?? null, verifiedAt: new Date().toISOString() };
 
     if (!finish(request.id, outcome.state, outcome.result)) {
       return c.json(refuse('request_already_answered', 'This request was already answered'), 409);

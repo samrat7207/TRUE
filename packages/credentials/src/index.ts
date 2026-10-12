@@ -176,8 +176,8 @@ function toBase64Url(bytes: Uint8Array): string {
 export type IssuerKeyInfo = { publicJwk: Jwk; state: string }; // state: Active | Retired | Compromised
 
 export type VerifyResult =
-  | { ok: true; issuer: string; statusIndex: number | null; claims: Record<string, unknown> }
-  | { ok: false; code: string; message: string };
+  | { ok: true; issuer: string; keyId: string; statusIndex: number | null; claims: Record<string, unknown> }
+  | { ok: false; code: string; message: string; keyId?: string };
 
 // Checks, in the library: issuer signature, disclosures match the signed hashes, credential expiry,
 // holder key-binding signature, nonce, audience, and freshness.
@@ -199,10 +199,10 @@ export async function verifyPresentation(input: {
     return { ok: false, code: 'malformed', message: 'Not a readable SD-JWT' };
   }
   const issuerKey = await input.getIssuerKey(issuer, keyId);
-  if (!issuerKey) return { ok: false, code: 'unknown_issuer', message: `Issuer ${issuer} key ${keyId} is not in the registry` };
+  if (!issuerKey) return { ok: false, code: 'unknown_issuer', keyId, message: `Issuer ${issuer} key ${keyId} is not in the registry` };
   // A leaked key can sign anything, so nothing it signed can be trusted any more.
   if (issuerKey.state === 'Compromised') {
-    return { ok: false, code: 'issuer_key_compromised', message: 'This credential was signed by a key the issuer has marked as compromised' };
+    return { ok: false, code: 'issuer_key_compromised', keyId, message: 'This credential was signed by a key the issuer has marked as compromised' };
   }
   const issuerJwk = issuerKey.publicJwk;
 
@@ -228,10 +228,48 @@ export async function verifyPresentation(input: {
     // Return only the disclosed claims, without the technical fields.
     const { iss, iat, exp, vct, cnf, revocation, ...claims } = result.payload as Record<string, unknown>;
     const statusIndex = (revocation as { idx?: number } | undefined)?.idx ?? null;
-    return { ok: true, issuer, statusIndex, claims };
+    return { ok: true, issuer, keyId, statusIndex, claims };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, code: errorCode(message), message };
+    return { ok: false, code: errorCode(message), keyId, message };
+  }
+}
+
+// What a wallet can tell about one of its own cards, without any verifier:
+// who issued it, with which key, until when it is valid, and whether the issuer's signature
+// checks out against the key in the registry.
+export type CardCheck = {
+  issuer: string;
+  keyId: string;
+  type: string;
+  issuedAt: number; // seconds since 1970
+  expiresAt: number;
+  status: 'verified' | 'key_compromised' | 'unknown_issuer' | 'bad_signature' | 'expired';
+};
+
+export async function inspectCredential(
+  credential: string,
+  getIssuerKey: (issuerId: string, keyId: string) => Promise<IssuerKeyInfo | null> | IssuerKeyInfo | null,
+): Promise<CardCheck> {
+  const issuerJwt = credential.split('~')[0];
+  const payload = decodeJwt(issuerJwt);
+  const base = {
+    issuer: String(payload.iss),
+    keyId: String(decodeProtectedHeader(issuerJwt).kid),
+    type: String(payload.vct),
+    issuedAt: Number(payload.iat),
+    expiresAt: Number(payload.exp),
+  };
+  const issuerKey = await getIssuerKey(base.issuer, base.keyId);
+  if (!issuerKey) return { ...base, status: 'unknown_issuer' };
+  if (issuerKey.state === 'Compromised') return { ...base, status: 'key_compromised' };
+  if (base.expiresAt < nowSeconds()) return { ...base, status: 'expired' };
+  try {
+    // No nonce is passed, so this checks the issuer's signature and the disclosures only.
+    await new SDJwtVcInstance({ ...COMMON, verifier: await ES256.getVerifier(issuerKey.publicJwk) }).verify(credential);
+    return { ...base, status: 'verified' };
+  } catch {
+    return { ...base, status: 'bad_signature' };
   }
 }
 
