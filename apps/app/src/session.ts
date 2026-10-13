@@ -1,7 +1,7 @@
 // The logged-in account, and calls to the core API on its behalf.
 // The server checks the session token on every call; this file only stores it and attaches it.
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { URLS } from '@true/shared';
+import { coreApi } from './server.ts';
 import { setWalletOwner, type Api } from '@true/wallet-core';
 
 export type AccountInfo = { id: string; kind: 'person' | 'institution'; name: string; email: string; category: string | null; verified: boolean };
@@ -37,7 +37,7 @@ export class ApiError extends Error {
 
 // GET (no body) or POST (with body) to the core API. Throws ApiError with the server's reason code and message.
 export async function api<T = any>(path: string, body?: unknown): Promise<T> { // eslint-disable-line @typescript-eslint/no-explicit-any
-  const response = await fetch(URLS.coreApi + path, {
+  const response = await fetch(coreApi() + path, {
     method: body === undefined ? 'GET' : 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${read()?.token ?? ''}` },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -50,7 +50,7 @@ export async function api<T = any>(path: string, body?: unknown): Promise<T> { /
 }
 
 // What packages/wallet-core needs to act as the logged-in person.
-export const walletApi = (): Api => ({ coreApi: URLS.coreApi, token: read()?.token ?? '', fetch: (url, init) => fetch(url, init) });
+export const walletApi = (): Api => ({ coreApi: coreApi(), token: read()?.token ?? '', fetch: (url, init) => fetch(url, init) });
 
 // Load something from the core API when the screen opens. data is null while loading.
 export function useApi<T = any>(path: string | null) { // eslint-disable-line @typescript-eslint/no-explicit-any

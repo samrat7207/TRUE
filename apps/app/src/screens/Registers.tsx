@@ -1,10 +1,11 @@
 // Registers: a person's saved checks. Each one is set up ONCE and pinned to ONE institution and ONE ID type.
 // The QR button makes a FRESH request every time and shows the result live.
 import { useEffect, useState } from 'react';
-import { CLAIM_LABELS, SENSITIVE_CLAIMS, TEMPLATES, URLS, templateLabel } from '@true/shared';
+import { CLAIM_LABELS, SENSITIVE_CLAIMS, TEMPLATES, templateLabel } from '@true/shared';
 import type { IssuerInfo } from '@true/registry';
 import { Badge, BottomTabs, Card, Field, PillButton, QrPanel, Screen, StepList, TopBar, go } from '../ui.tsx';
 import { getSession } from '../session.ts';
+import { verifierApi } from '../server.ts';
 import { STEP_LABELS, registry } from '../wallet.ts';
 
 export type Register = { id: string; name: string; purpose: string; issuerId: string; issuerName: string; type: string; fields: string[] };
@@ -12,7 +13,7 @@ export type Register = { id: string; name: string; purpose: string; issuerId: st
 // Call the verifier front door as the logged-in person. Returns the response so callers can read headers too.
 // Gives up after 10 seconds instead of waiting for ever.
 export async function verifierCall(path: string, body?: unknown): Promise<Response> {
-  return fetch(URLS.verifierApi + path, {
+  return fetch(verifierApi() + path, {
     method: body === undefined ? 'GET' : 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${getSession()?.token ?? ''}` },
     body: body === undefined ? undefined : JSON.stringify(body),

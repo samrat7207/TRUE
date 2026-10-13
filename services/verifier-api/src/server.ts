@@ -100,4 +100,5 @@ setInterval(async () => {
   } catch { /* issuer or chain not reachable right now: keep using the cached list */ }
 }, STATUS_REFRESH_SECONDS * 1000);
 
-serve({ fetch: app.fetch, port: PORT }, () => console.log(`Verifier instance ${INSTANCE} listening on http://localhost:${PORT}`));
+// 127.0.0.1 only: phones and other machines go through the front door, never straight to an instance.
+serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, () => console.log(`Verifier instance ${INSTANCE} listening on http://127.0.0.1:${PORT}`));

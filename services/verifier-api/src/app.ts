@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { LOAD_TEST_VERIFIER_ID, REGISTER_SERVICE_ID, TEMPLATES, URLS } from '@true/shared';
+import { LOAD_TEST_VERIFIER_ID, REGISTER_SERVICE_ID, TEMPLATES, URLS, isAllowedOrigin } from '@true/shared';
 import { verifyPresentation, verifySession, signRequest, randomToken, sha256Hex, type IssuerKeyInfo, type Jwk, type Session } from '@true/credentials';
 import type { VerifierRow, RequestRow, RegisterRow, VisitRow, DenialRow } from './db.ts';
 import { buildSteps } from './steps.ts';
@@ -37,7 +37,10 @@ export type InstanceOptions = {
 
 export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLookup, options: InstanceOptions = {}) {
   const app = new Hono();
-  app.use('*', cors());
+  app.use('*', cors({ origin: (origin) => (isAllowedOrigin(origin) ? origin : null) }));
+  // The address the caller used to reach the front door (for example http://192.168.1.20:4000). Links we hand
+  // out (in QR codes and signed requests) are built from it, so a phone gets an address that works for a phone.
+  const publicOrigin = (c: { req: { header: (name: string) => string | undefined } }) => c.req.header('x-public-origin') ?? URLS.verifierApi;
   app.notFound((c) => c.json(refuse('unknown_route', 'This verifier server does not have that address. If the app is newer than the server, restart "npm run dev".'), 404));
   const instance = options.instance ?? '1';
   let lastSyncedAt: number | null = options.syncedAtStart ? Date.now() : null;
@@ -269,7 +272,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       id, REGISTER_SERVICE_ID, JSON.stringify(claims), randomToken(), now.toISOString(), expiresAt, now.toISOString(), register.id,
     );
     await recordAndShare('request.created', id);
-    const requestUri = `${URLS.verifierApi}/v1/requests/${id}/object`;
+    const requestUri = `${publicOrigin(c)}/v1/requests/${id}/object`;
     return c.json({ requestId: id, requestUri, walletUrl: `${URLS.app}/#/consent?request_uri=${encodeURIComponent(requestUri)}`, expiresAt }, 201);
   });
 
@@ -290,7 +293,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       id, verifier.id, claimsJson, randomToken(), now.toISOString(), expiresAt, now.toISOString(),
     );
     await recordAndShare('request.created', id);
-    const requestUri = `${URLS.verifierApi}/v1/requests/${id}/object`;
+    const requestUri = `${publicOrigin(c)}/v1/requests/${id}/object`;
     // The QR code is a link that opens the wallet and tells it where to fetch the request.
     const walletUrl = `${URLS.app}/#/consent?request_uri=${encodeURIComponent(requestUri)}`;
     return c.json({ requestId: id, requestUri, walletUrl, expiresAt }, 201);
@@ -312,7 +315,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       purpose: register?.purpose ?? verifier.purpose,
       claims: JSON.parse(request.claims_json) as string[],
       nonce: request.nonce,
-      responseUri: `${URLS.verifierApi}/v1/requests/${request.id}/response`,
+      responseUri: `${publicOrigin(c)}/v1/requests/${request.id}/response`,
     };
     const key = options.verifierKeys?.[verifier.id];
     const signedRequest = key ? await signRequest(content, key, new Date(request.expires_at)) : null;

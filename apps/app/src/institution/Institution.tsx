@@ -5,6 +5,7 @@ import { CLAIM_LABELS, DATE_CLAIMS, TEMPLATES, templateLabel } from '@true/share
 import { Avatar, Badge, BottomTabs, Card, Chips, Field, INSTITUTION_TABS, Orb, PillButton, Screen, TopBar, go } from '../ui.tsx';
 import { api, attempt, setSession, useApi, useSession } from '../session.ts';
 import { AccountCard, DeleteAccount } from '../screens/Person.tsx';
+import { ServerAddress } from '../screens/ServerAddress.tsx';
 
 const Tabs = ({ active }: { active: string }) => <BottomTabs tabs={INSTITUTION_TABS} active={active} />;
 
@@ -318,6 +319,7 @@ function Account() {
     <Screen tabs={<Tabs active="/inst/account" />}>
       <h1 className="mb-5 text-title font-bold leading-tight">Account</h1>
       <AccountCard />
+      <div className="mb-4"><ServerAddress /></div>
       <div className="mb-4"><PillButton kind="secondary" onClick={() => { setSession(null); go('/'); }}>Log out</PillButton></div>
       <DeleteAccount consequence="Your signing key is retired and every ID you issued is revoked." />
     </Screen>

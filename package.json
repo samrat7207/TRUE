@@ -10,6 +10,7 @@
     "brand": "node scripts/sync-brand.mjs",
     "reset": "node scripts/reset.mjs",
     "verify-institution": "node scripts/verify-institution.ts",
+    "check:offline": "node scripts/check-offline.mjs",
     "chain:test": "npm test -w contracts"
   },
   "devDependencies": {

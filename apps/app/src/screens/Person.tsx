@@ -6,6 +6,7 @@ import { Avatar, Badge, Card, Field, PillButton, Screen, TopBar, go } from '../u
 import { api, attempt, setSession, useSession } from '../session.ts';
 import { useCards } from '../wallet.ts';
 import { verifierCall } from './Registers.tsx';
+import { ServerAddress } from './ServerAddress.tsx';
 
 // ---------- Activity: what was shared, with whom, when, and the result ----------
 
@@ -126,6 +127,7 @@ export function Profile() {
         <Field label="Private key">Made on this device, cannot be exported</Field>
       </Card>
       <div className="mb-4"><PillButton kind="secondary" onClick={() => go('/activity')}>Activity</PillButton></div>
+      <div className="mb-4"><ServerAddress /></div>
       <DiscoverCard />
       <div className="mb-4"><PillButton kind="secondary" onClick={() => { setSession(null); go('/'); }}>Log out</PillButton></div>
       <DeleteAccount

@@ -5,11 +5,30 @@ import { TEMPLATES } from '@true/shared';
 import { inspectCredential, readCredential, type CardCheck } from '@true/credentials';
 import { createRegistryReader, type IssuerInfo } from '@true/registry';
 import { getCredentials, type Fetch, type StoredCredential } from '@true/wallet-core';
+import { coreApi } from './server.ts';
 
-// The registry contract address is filled in by vite.config.ts from data/chain.json.
-declare const __REGISTRY_ADDRESS__: `0x${string}`;
-// The app reads the public registry straight from the chain node, through the dev server's /chain path.
-export const registry = createRegistryReader({ rpcUrl: window.location.origin + '/chain', address: __REGISTRY_ADDRESS__ });
+// The app reads the public registry through the server's read-only /chain window (the chain node itself is
+// not on the network). The contract address is asked for once per server address.
+type Reader = ReturnType<typeof createRegistryReader>;
+let cached: { server: string; reader: Promise<Reader> } | null = null;
+function reader(): Promise<Reader> {
+  const server = coreApi();
+  if (cached?.server !== server) {
+    const loading = fetch(`${server}/v1/chain`, { signal: AbortSignal.timeout(8000) })
+      .then((response) => response.json())
+      .then((body) => createRegistryReader({ rpcUrl: `${server}/chain`, address: body.address }));
+    loading.catch(() => { cached = null; }); // not reachable: try again next time
+    cached = { server, reader: loading };
+  }
+  return cached.reader;
+}
+// The same calls as before; each one waits for the reader above.
+export const registry = {
+  getIssuer: async (id: string) => (await reader()).getIssuer(id),
+  listIssuers: async () => (await reader()).listIssuers(),
+  getIssuerKey: async (issuerId: string, keyId: string) => (await reader()).getIssuerKey(issuerId, keyId),
+  getVerifier: async (id: string) => (await reader()).getVerifier(id),
+};
 
 export const browserFetch: Fetch = (url, init) => fetch(url, init);
 

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { BRAND, INSTITUTION_CATEGORIES } from '@true/shared';
 import { Blob, Card, PillButton, Screen, TopBar, go } from '../ui.tsx';
 import { api, setSession, type Session } from '../session.ts';
+import { ServerAddress } from './ServerAddress.tsx';
 
 const INPUT = 'mt-1 w-full rounded-row border border-line bg-surface px-4 py-3 font-normal';
 const DemoNote = () => <p className="mt-4 text-center text-tiny text-muted">Demo: emails are not verified. Use made-up addresses.</p>;
@@ -20,6 +21,7 @@ export function Welcome() {
         <PillButton onClick={() => go('/signup')}>Create an account</PillButton>
         <PillButton kind="secondary" onClick={() => go('/login')}>Log in</PillButton>
       </div>
+      <div className="mt-6"><ServerAddress /></div>
       <DemoNote />
     </Screen>
   );

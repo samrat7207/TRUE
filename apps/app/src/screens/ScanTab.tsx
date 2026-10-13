@@ -1,7 +1,9 @@
 // Scan tab: read a checker's QR code with the camera, or paste the link.
 import { useEffect, useRef, useState } from 'react';
 import { parseScanned } from '@true/wallet-core';
+import { CapacitorBarcodeScanner, CapacitorBarcodeScannerAndroidScanningLibrary, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { BottomTabs, Card, PillButton, Screen, go } from '../ui.tsx';
+import { isNativeApp } from '../server.ts';
 
 // The browser's built-in QR reader. It exists in Chrome on Android and macOS, but not everywhere
 // (for example not in Chrome on Windows), so the paste box below is always available.
@@ -46,12 +48,33 @@ export function Scan() {
     };
   }, [camera]);
 
+  // Android app: the plugin opens the camera and reads the QR code on the phone itself, using the ZXing
+  // library that ships inside the app. Nothing is downloaded and no Google Play Services module is needed.
+  async function scanNative() {
+    setError('');
+    try {
+      const result = await CapacitorBarcodeScanner.scanBarcode({
+        hint: CapacitorBarcodeScannerTypeHint.QR_CODE,
+        scanInstructions: "Point at the checker's QR code",
+        android: { scanningLibrary: CapacitorBarcodeScannerAndroidScanningLibrary.ZXING },
+      });
+      if (!open(result.ScanResult)) setError('That QR code is not a TRUE request.');
+    } catch (e) {
+      // Cancelled, or the camera permission was refused.
+      const message = e instanceof Error ? e.message : String(e);
+      setError(/permission|denied/i.test(message)
+        ? 'Camera permission was refused. Allow the camera for TRUE in Android Settings > Apps > TRUE > Permissions, or paste the link below.'
+        : `Scanning did not finish (${message || 'cancelled'}). You can paste the link below instead.`);
+    }
+  }
+
   return (
     <Screen tabs={<BottomTabs active="/scan" />}>
       <h1 className="text-title font-bold leading-tight">Scan</h1>
       <p className="mt-2 mb-5 text-muted">Scan a checker's QR code to share a proof. You see exactly what is asked before anything is sent.</p>
 
-      <Card className="mb-5">
+      {isNativeApp && <div className="mb-5"><PillButton onClick={scanNative}>Scan QR with the camera</PillButton></div>}
+      <Card className={`mb-5 ${isNativeApp ? 'hidden' : ''}`}>
         {camera === 'on' && BarcodeDetectorClass
           ? <video ref={video} muted playsInline className="aspect-square w-full rounded-row bg-ink object-cover" />
           : (

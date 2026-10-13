@@ -7,7 +7,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { STATUS_LIST_ID, STATUS_LIST_URL, TEMPLATES, INSTITUTION_CATEGORIES, setBit, createFailureLimiter, createRateCounter } from '@true/shared';
+import { STATUS_LIST_ID, STATUS_LIST_URL, TEMPLATES, INSTITUTION_CATEGORIES, setBit, createFailureLimiter, createRateCounter, isAllowedOrigin } from '@true/shared';
 import {
   issueCredential, verifyHolderProof, randomToken, generateSigningKeyPair, sha256Hex, signSession, verifySession, type Jwk,
 } from '@true/credentials';
@@ -46,7 +46,8 @@ export const statusListHash = (bitsHex: string) => sha256Hex(bitsHex);
 
 export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options: CoreOptions = {}) {
   const app = new Hono<Vars>();
-  app.use('*', cors());
+  // Browsers and the Android app may call us from this machine or from the local network only.
+  app.use('*', cors({ origin: (origin) => (isAllowedOrigin(origin) ? origin : null) }));
   const now = options.now ?? Date.now;
   const isoNow = () => new Date(now()).toISOString();
   const sourceOf = (c: Context) => options.getSource?.(c) ?? 'unknown';

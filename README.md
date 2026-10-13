@@ -80,6 +80,8 @@ Every third-party library used. All code in this repository was written during t
 | [Vite](https://github.com/vitejs/vite) + @vitejs/plugin-react | Front-end dev server and build | MIT |
 | [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) + @tailwindcss/vite | Styling | MIT |
 | [qrcode](https://github.com/soldair/node-qrcode) | Drawing QR codes | MIT |
+| [Capacitor](https://github.com/ionic-team/capacitor) (@capacitor/core, cli, android) | Wraps the web app as an Android app | MIT |
+| [@capacitor/barcode-scanner](https://github.com/ionic-team/capacitor-barcode-scanner) | QR scanning with the phone camera (ZXing, bundled in the app) | MIT |
 | [Hardhat](https://github.com/NomicFoundation/hardhat) + hardhat-toolbox-viem | Local chain, contract compile and tests | MIT |
 | [viem](https://github.com/wevm/viem) | Reading and writing the registry contract | MIT |
 | [Vitest](https://github.com/vitest-dev/vitest), [TypeScript](https://github.com/microsoft/TypeScript) | Tests, type checking | MIT, Apache-2.0 |

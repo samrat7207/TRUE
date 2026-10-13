@@ -401,3 +401,11 @@ Registers in the person app: pinned institution + credential type + fields, own 
 - The consent screen tells the holder that the owner keeps these details and for how long.
 
 **Bug fixed: visitor list stuck on "Loading".** Cause: the verifier front door and its three instances were still running code from before the visitor list existed (only the core API reloads itself), so the route answered a plain-text 404 that the app could not read and kept waiting. Fixes: the screen now always ends in a list, an empty state or an error with Retry and the status code (10-second timeout); unknown addresses answer JSON; the front door restarts its instances when verifier or shared code changes; `/health` lists the features a running instance has.
+
+## Android debug APK. Decisions
+- Capacitor 8 wraps `apps/app`; appId `app.trueid.wallet`; the app is served inside the WebView from http://localhost so it may call the laptop over plain http (cleartext) while WebCrypto still works.
+- One "Server address" (no port) on the first screen and in Profile; the app derives :4001 and :4000 from it. Browser default = the machine the page came from; Android default = empty.
+- The chain node is NOT exposed to the Wi-Fi (its test accounts are unlocked). The core API offers the contract address and a read-only relay (`/chain`: eth_call and three other read methods only).
+- Verifier links are built from the address the caller used, so a phone gets LAN addresses. Verifier instances listen on 127.0.0.1 only; `/proxy/*` (ops) answers only to the laptop.
+- CORS allows capacitor://localhost, localhost and private LAN addresses only.
+- QR scanning: @capacitor/barcode-scanner with ZXing, which is inside the APK: no Google Play Services download.

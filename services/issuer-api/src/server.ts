@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { getConnInfo } from '@hono/node-server/conninfo';
-import { STATUS_LIST_ID } from '@true/shared';
+import { CHAIN_RPC_URL, STATUS_LIST_ID } from '@true/shared';
 import { createRegistryReader, createRegistryWriter, type ChainConfig } from '@true/registry';
 import { openCoreDb } from './db.ts';
 import { createCoreApp, type CoreChain, type SeedAccount } from './app.ts';
@@ -67,5 +67,20 @@ await publishToChain(
   (await reader.getStatusAnchor(STATUS_LIST_ID)).version,
 );
 console.log('Institutions, keys and the revocation fingerprint are on the chain');
+
+// ---------- the registry, for apps that cannot reach the chain node themselves (phones on the Wi-Fi) ----------
+// The chain node stays on this machine only: its test accounts are unlocked, so it must not be on the network.
+// Apps get the contract address here, and may send READ-ONLY calls through /chain. Nothing that changes the chain passes.
+const READ_ONLY_METHODS = ['eth_call', 'eth_chainId', 'eth_blockNumber', 'eth_getCode'];
+app.get('/v1/chain', (c) => c.json({ address: config.address }));
+app.post('/chain', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const calls = Array.isArray(body) ? body : [body];
+  if (!body || calls.some((call) => !READ_ONLY_METHODS.includes(call?.method))) {
+    return c.json({ error: { code: 'read_only', message: 'Only read-only registry calls are allowed here' } }, 403);
+  }
+  const answer = await fetch(CHAIN_RPC_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  return c.json(await answer.json());
+});
 
 serve({ fetch: app.fetch, port: 4001 }, () => console.log('Core API listening on http://localhost:4001'));

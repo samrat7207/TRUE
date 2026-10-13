@@ -2,7 +2,7 @@
 // It does not know how instances are started or reached; proxy.ts supplies that. This keeps it testable:
 // the tests plug in in-process instances instead of real network calls.
 import { Hono, type Context } from 'hono';
-import { LOAD_TEST_VERIFIER_ID } from '@true/shared';
+import { LOAD_TEST_VERIFIER_ID, isAllowedOrigin, isLoopback } from '@true/shared';
 import { cors } from 'hono/cors';
 import { createFailureLimiter, createRateCounter } from '@true/shared';
 
@@ -36,6 +36,7 @@ export function createFrontDoor(options: {
   hashSource: (text: string) => string; // one-way hash, so logs and screens never show an IP address
   controls?: { kill: (name: string) => void; restart: (name: string) => void };
   onBlock?: (event: BlockEvent) => void; // called once when a source gets blocked (for the audit log)
+  localOnlyOps?: boolean; // true on the real front door: /proxy/* answers only to this machine
 }) {
   const { backends } = options;
   const limits = options.limits ?? DEFAULT_LIMITS;
@@ -53,7 +54,15 @@ export function createFrontDoor(options: {
 
   const app = new Hono();
   // exposeHeaders lets a browser page read these headers.
-  app.use('*', cors({ origin: '*', exposeHeaders: ['X-Served-By', 'Retry-After'] }));
+  app.use('*', cors({ origin: (origin) => (isAllowedOrigin(origin) ? origin : null), exposeHeaders: ['X-Served-By', 'Retry-After'] }));
+
+  // Operations routes (status, kill, restart) are for the laptop only: a phone on the Wi-Fi gets 403.
+  app.use('/proxy/*', async (c, next) => {
+    if (options.localOnlyOps && !isLoopback(options.getSource(c))) {
+      return c.json({ error: { code: 'forbidden', message: 'Operations routes are only reachable from the server machine itself' } }, 403);
+    }
+    await next();
+  });
 
   const tooMany = (c: Context, code: string, seconds: number) => {
     c.header('Retry-After', String(seconds));
@@ -93,7 +102,11 @@ export function createFrontDoor(options: {
       try {
         const response = await backend.forward(url.pathname + url.search, {
           method: c.req.method,
-          headers: { 'content-type': c.req.header('content-type') ?? 'application/json', authorization: c.req.header('authorization') ?? '' },
+          headers: {
+            'content-type': c.req.header('content-type') ?? 'application/json',
+            authorization: c.req.header('authorization') ?? '',
+            'x-public-origin': url.origin, // how the caller reached us; the instance builds links from it
+          },
           body,
         });
         return new Response(await response.text(), {

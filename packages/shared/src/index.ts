@@ -65,3 +65,15 @@ export { createFailureLimiter, createRateCounter } from './ratelimit.ts';
 // Registers are stored by the verifier service. Their requests are signed with the service's own key,
 // which is the ONE verifier entry on the chain for all registers.
 export const REGISTER_SERVICE_ID = 'verifier:true-registers';
+
+// Web origins allowed to call the servers: the Android app (Capacitor serves it from "localhost"),
+// pages on this machine, and pages served from a private LAN address. Nothing from the public internet.
+export function isAllowedOrigin(origin: string): boolean {
+  if (origin === 'capacitor://localhost') return true;
+  let host: string;
+  try { host = new URL(origin).hostname; } catch { return false; }
+  return host === 'localhost' || host === '127.0.0.1' || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+}
+
+// True when a network caller is this machine itself (used to keep admin routes off the Wi-Fi).
+export const isLoopback = (address: string) => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';

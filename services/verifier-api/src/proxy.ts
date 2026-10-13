@@ -23,7 +23,7 @@ const FRONT_PORT = env('FRONT_DOOR_PORT', 4000);
 const BASE_PORT = env('INSTANCE_BASE_PORT', 4002);
 
 const children = new Map<string, ChildProcess>();
-const urlOf = (backend: { port: number }) => `http://localhost:${backend.port}`;
+const urlOf = (backend: { port: number }) => `http://127.0.0.1:${backend.port}`;
 
 const backends: Backend[] = Array.from({ length: COUNT }, (_, i) => {
   const port = BASE_PORT + i * 10;
@@ -32,7 +32,7 @@ const backends: Backend[] = Array.from({ length: COUNT }, (_, i) => {
     port,
     alive: false,
     health: {},
-    forward: (path, init) => fetch(`http://localhost:${port}${path}`, { ...init, signal: AbortSignal.timeout(5000) }),
+    forward: (path, init) => fetch(`http://127.0.0.1:${port}${path}`, { ...init, signal: AbortSignal.timeout(5000) }),
   };
 });
 
@@ -77,6 +77,7 @@ const app = createFrontDoor({
   // Salted with our internal key, so the short hash cannot be matched back to an IP address by guessing.
   hashSource: (text) => sha256Hex(INTERNAL_KEY + text).slice(0, 16),
   controls: { kill, restart: start },
+  localOnlyOps: true,
   // Write the block into the audit log of any alive instance; it shares it with the others.
   onBlock: (event) => {
     const backend = backends.find((b) => b.alive);

@@ -9,3 +9,15 @@ contracts/cache/
 contracts/types/
 .env
 *.log
+
+# Android (Capacitor): never commit build output, signing material or machine-specific files
+*.apk
+*.aab
+*.keystore
+*.jks
+local.properties
+apps/app/android/.gradle/
+apps/app/android/build/
+apps/app/android/app/build/
+apps/app/android/capacitor-cordova-android-plugins/
+apps/app/android/app/src/main/assets/public/
