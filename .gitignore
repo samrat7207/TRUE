@@ -21,3 +21,17 @@ apps/app/android/build/
 apps/app/android/app/build/
 apps/app/android/capacitor-cordova-android-plugins/
 apps/app/android/app/src/main/assets/public/
+
+# Secrets and machine-local files
+.env.*
+!.env.example
+*.pem
+*.key
+*.db-wal
+*.db-shm
+.claude/settings.local.json
+build/
+apps/app/android/**/build/
+
+# Design reference images (stock photos and an ID-style card): never publish
+docs/design/
