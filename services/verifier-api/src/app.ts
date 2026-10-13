@@ -1,13 +1,13 @@
 // Verifier API routes.
 // Hard rule: nothing in this file calls the issuer's API or database. A presentation is checked using
 // only its own signatures, the issuer key from the chain registry, and our cached copy of the revocation list.
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { LOAD_TEST_VERIFIER_ID, REGISTER_SERVICE_ID, TEMPLATES, URLS, isAllowedOrigin } from '@true/shared';
+import { LOAD_TEST_VERIFIER_ID, REGISTER_SERVICE_ID, TEMPLATES, URLS, isAllowedOrigin, createEventLog, eventQuery, templateLabel } from '@true/shared';
 import { verifyPresentation, verifySession, signRequest, randomToken, sha256Hex, type IssuerKeyInfo, type Jwk, type Session } from '@true/credentials';
-import type { VerifierRow, RequestRow, RegisterRow, VisitRow, DenialRow } from './db.ts';
+import { DEMO_VERIFIERS, type VerifierRow, type RequestRow, type RegisterRow, type VisitRow, type DenialRow } from './db.ts';
 import { buildSteps } from './steps.ts';
 import {
   addAuditEvent, deleteLoadTestRequests, exportState, purgeOldVisits, saveDenial, saveRegister, saveVisit, getStatusBits, isRevoked, mergeState, setRevoked, toShared, type SharedState,
@@ -32,6 +32,9 @@ export type InstanceOptions = {
   verifierKeys?: Record<string, Jwk>;
   // The accounts service's PUBLIC key, used to check session tokens here without calling that service.
   getSessionKey?: () => Jwk | null;
+  // True when a request reached us from this machine itself (the front door). Only then do we believe the
+  // "x-device" header, which carries the front door's short hashed label of the phone that is calling.
+  trustsDeviceHeader?: (c: Context) => boolean;
   visitRetentionDays?: number; // how long visitor-list rows are kept (default 30) // verifier id => private key used to sign that verifier's requests // true if this instance pulled the full state from a peer when it started
 };
 
@@ -44,6 +47,16 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
   app.notFound((c) => c.json(refuse('unknown_route', 'This verifier server does not have that address. If the app is newer than the server, restart "npm run dev".'), 404));
   const instance = options.instance ?? '1';
   let lastSyncedAt: number | null = options.syncedAtStart ? Date.now() : null;
+
+  // ---------- live event feed for the Control Room (in memory, no personal data: see packages/shared/src/events.ts) ----------
+  const events = createEventLog(`verifier-${instance}`);
+  const deviceOf = (c: Context) => (options.trustsDeviceHeader?.(c) ? c.req.header('x-device') || null : null);
+  if (options.syncedAtStart) events.emit('success', 'caught_up', `Instance ${instance} caught up from a peer`);
+  // Who a request is for, as shown in the feed: the register's name, or the demo verifier's name.
+  const checkerName = (request: RequestRow) => {
+    const register = request.register_id ? (db.prepare('SELECT * FROM registers WHERE id = ?').get(request.register_id) as RegisterRow | undefined) : undefined;
+    return register ? `register "${register.name}"` : getVerifier(request.verifier_id)?.name ?? 'unknown verifier';
+  };
 
   const getVerifier = (id: string) => db.prepare('SELECT * FROM verifiers WHERE id = ?').get(id) as VerifierRow | undefined;
   const getRequest = (id: string) => db.prepare('SELECT * FROM requests WHERE id = ?').get(id) as RequestRow | undefined;
@@ -118,6 +131,12 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     return c.json({ ok: true });
   });
 
+  // The front door collects our events from here (shared secret needed, like everything under /internal).
+  app.get('/internal/events', (c) => {
+    const { after, limit } = eventQuery((name) => c.req.query(name));
+    return c.json(events.page(after, limit));
+  });
+
   // The other instance reads everything from here when it restarts.
   app.get('/internal/state', (c) => c.json(exportState(db)));
 
@@ -187,6 +206,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       created_at: now, updated_at: now, deleted: 0,
     };
     await storeRegister(register);
+    events.emit('info', 'register_created', `Register "${register.name}" created (accepts ${templateLabel(register.type)} from ${register.issuer_name})`, deviceOf(c));
     return c.json({ register: registerView(register) }, 201);
   });
 
@@ -198,7 +218,10 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       ? (db.prepare('SELECT * FROM registers WHERE owner_id = ? AND deleted = 0').all(person.sub) as RegisterRow[])
       : [liveRegister(c.req.param('id'))].filter((r): r is RegisterRow => r?.owner_id === person.sub);
     if (mine.length === 0 && c.req.param('id') !== 'all') return c.json(refuse('unknown_register', 'No such register'), 404);
-    for (const register of mine) await storeRegister({ ...register, deleted: 1, updated_at: new Date().toISOString() });
+    for (const register of mine) {
+      await storeRegister({ ...register, deleted: 1, updated_at: new Date().toISOString() });
+      events.emit('warn', 'register_deleted', `Register "${register.name}" deleted`, deviceOf(c));
+    }
     return c.json({ ok: true, deleted: mine.length });
   });
 
@@ -263,6 +286,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     const stored = JSON.parse(register.fields_json) as string[];
     const body = z.object({ claims: z.array(z.string()).min(1).optional() }).safeParse(await c.req.json().catch(() => ({})));
     const claims = body.success && body.data.claims ? body.data.claims : stored;
+    if (claims.some((claim) => !stored.includes(claim))) events.emit('warn', 'beyond_register', `Over-ask refused: a request for register "${register.name}" asked for more than it was set up with`, deviceOf(c));
     if (claims.some((claim) => !stored.includes(claim))) return c.json(refuse('beyond_register', 'A request cannot ask for fields the register was not set up with'), 400);
 
     const id = randomToken();
@@ -272,6 +296,7 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       id, REGISTER_SERVICE_ID, JSON.stringify(claims), randomToken(), now.toISOString(), expiresAt, now.toISOString(), register.id,
     );
     await recordAndShare('request.created', id);
+    events.emit('info', 'request_created', `Request created for register "${register.name}"`, deviceOf(c));
     const requestUri = `${publicOrigin(c)}/v1/requests/${id}/object`;
     return c.json({ requestId: id, requestUri, walletUrl: `${URLS.app}/#/consent?request_uri=${encodeURIComponent(requestUri)}`, expiresAt }, 201);
   });
@@ -293,6 +318,14 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       id, verifier.id, claimsJson, randomToken(), now.toISOString(), expiresAt, now.toISOString(),
     );
     await recordAndShare('request.created', id);
+    // Not one line per synthetic load-test request: the load test writes a single summary line.
+    if (verifier.id !== LOAD_TEST_VERIFIER_ID) {
+      const allowed = JSON.parse(verifier.allowed_claims_json) as string[];
+      const overAsk = (JSON.parse(claimsJson) as string[]).some((claim) => !allowed.includes(claim));
+      if (DEMO_VERIFIERS.find((v) => v.id === verifier.id)?.registered === false) events.emit('warn', 'unregistered_verifier', `Request created by an UNREGISTERED verifier: ${verifier.name}`, deviceOf(c));
+      else if (overAsk) events.emit('warn', 'over_ask', `Over-ask: ${verifier.name} created a request for more than it is registered for`, deviceOf(c));
+      else events.emit('info', 'request_created', `Request created for ${verifier.name}`, deviceOf(c));
+    }
     const requestUri = `${publicOrigin(c)}/v1/requests/${id}/object`;
     // The QR code is a link that opens the wallet and tells it where to fetch the request.
     const walletUrl = `${URLS.app}/#/consent?request_uri=${encodeURIComponent(requestUri)}`;
@@ -335,12 +368,14 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
     if (request.state !== 'pending') return c.json(refuse('request_already_answered', 'This request was already answered'), 409);
     if (new Date(request.expires_at) < new Date()) {
       db.prepare("UPDATE requests SET state = 'expired' WHERE id = ? AND state = 'pending'").run(request.id);
+      events.emit('error', 'request_expired', `Denied at ${checkerName(request)}: request_expired`, deviceOf(c));
       return c.json(refuse('request_expired', 'This request has expired'), 410);
     }
 
     if (body.data.declined || !body.data.presentation) {
       finish(request.id, 'denied', { code: 'user_declined', message: 'The holder declined to share' });
       await recordAndShare('consent.denied', request.id);
+      events.emit('warn', 'user_declined', `The holder declined to share with ${checkerName(request)}`, deviceOf(c));
       return c.json({ state: 'denied', code: 'user_declined' });
     }
 
@@ -388,6 +423,9 @@ export function createVerifierApp(db: DatabaseSync, getIssuerKey: IssuerKeyLooku
       return c.json(refuse('request_already_answered', 'This request was already answered'), 409);
     }
     await recordAndShare(outcome.state === 'verified' ? 'presentation.verified' : 'presentation.failed', request.id);
+    // The feed line carries the checker's name and a reason code. Never what was disclosed.
+    if (outcome.state === 'verified') events.emit('success', 'verified', `Verified at ${checkerName(request)} · served by instance ${instance}`, deviceOf(c));
+    else events.emit('error', failureCode ?? 'denied', `Denied at ${checkerName(request)}: ${failureCode} · served by instance ${instance}`, deviceOf(c));
 
     // Visitor list. A successful check through a register is kept: only the fields the register asked for.
     // A refused check keeps NO details: just the reason code and the time.

@@ -3,7 +3,8 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
-import { STATUS_LIST_ID, STATUS_LIST_URL } from '@true/shared';
+import { getConnInfo } from '@hono/node-server/conninfo';
+import { STATUS_LIST_ID, STATUS_LIST_URL, isLoopback } from '@true/shared';
 import { sha256Hex } from '@true/credentials';
 import { createRegistryReader, type ChainConfig } from '@true/registry';
 import { openVerifierDb } from './db.ts';
@@ -75,6 +76,7 @@ const SESSION_KEY_FILE = new URL('../../../data/session-public-key.json', import
 
 const app = createVerifierApp(db, getIssuerKey, {
   getSessionKey: () => (existsSync(SESSION_KEY_FILE) ? JSON.parse(readFileSync(SESSION_KEY_FILE, 'utf8')) : null),
+  trustsDeviceHeader: (c) => isLoopback(getConnInfo(c).remote.address ?? ''), // only the front door on this machine
   visitRetentionDays: Number(process.env.VISIT_RETENTION_DAYS ?? 30),
   verifierKeys,
   instance: INSTANCE,

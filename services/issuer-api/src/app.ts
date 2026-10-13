@@ -7,7 +7,10 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
 import type { DatabaseSync } from 'node:sqlite';
-import { STATUS_LIST_ID, STATUS_LIST_URL, TEMPLATES, INSTITUTION_CATEGORIES, setBit, createFailureLimiter, createRateCounter, isAllowedOrigin } from '@true/shared';
+import {
+  STATUS_LIST_ID, STATUS_LIST_URL, TEMPLATES, INSTITUTION_CATEGORIES, setBit, createFailureLimiter, createRateCounter, isAllowedOrigin,
+  createEventLog, eventQuery, opsRefusal, OPS_ORIGINS, templateLabel,
+} from '@true/shared';
 import {
   issueCredential, verifyHolderProof, randomToken, generateSigningKeyPair, sha256Hex, signSession, verifySession, type Jwk,
 } from '@true/credentials';
@@ -34,6 +37,7 @@ export type CoreOptions = {
   seedAccounts?: SeedAccount[]; // demo accounts created on a brand-new database
   now?: () => number; // clock in milliseconds; tests move it
   getSource?: (c: Context) => string; // caller's IP address, for the login rate limit
+  getDevice?: (c: Context) => string | null; // short hashed label of the calling device, for the live event feed
 };
 
 type Vars = { Variables: { account: Account } };
@@ -47,10 +51,35 @@ export const statusListHash = (bitsHex: string) => sha256Hex(bitsHex);
 export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options: CoreOptions = {}) {
   const app = new Hono<Vars>();
   // Browsers and the Android app may call us from this machine or from the local network only.
-  app.use('*', cors({ origin: (origin) => (isAllowedOrigin(origin) ? origin : null) }));
+  // The operations routes (/ops/*) are stricter: only the app opened on the laptop itself.
+  app.use('*', cors({ origin: (origin, c) => ((c.req.path.startsWith('/ops/') ? OPS_ORIGINS.includes(origin) : isAllowedOrigin(origin)) ? origin : null) }));
   const now = options.now ?? Date.now;
   const isoNow = () => new Date(now()).toISOString();
   const sourceOf = (c: Context) => options.getSource?.(c) ?? 'unknown';
+
+  // ---------- live event feed for the Control Room (in memory, no personal data: see packages/shared/src/events.ts) ----------
+  const events = createEventLog('issuer');
+  const deviceOf = (c: Context) => options.getDevice?.(c) ?? null;
+
+  // Operations routes answer ONLY to the server machine itself: a phone on the Wi-Fi gets 403.
+  app.use('/ops/*', async (c, next) => {
+    const refusal = opsRefusal({ address: sourceOf(c), forwardedFor: c.req.header('x-forwarded-for'), origin: c.req.header('origin') });
+    if (refusal) return c.json(refuse('forbidden', `Operations routes are only for the server machine itself (${refusal})`), 403);
+    await next();
+  });
+  app.get('/ops/events', (c) => {
+    const { after, limit } = eventQuery((name) => c.req.query(name));
+    return c.json(events.page(after, limit));
+  });
+  // "npm run verify-institution" runs in its own process and tells the running server here, so the feed can show it.
+  // The line is written only if the database really says the institution is verified.
+  app.post('/ops/notify/institution-verified', async (c) => {
+    const body = z.object({ institutionId: z.string() }).safeParse(await c.req.json().catch(() => null));
+    const account = body.success ? (db.prepare("SELECT * FROM accounts WHERE id = ? AND kind = 'institution' AND verified = 1").get(body.data.institutionId) as Account | undefined) : undefined;
+    if (!account) return c.json(refuse('unknown_institution', 'No verified institution with that id'), 404);
+    events.emit('success', 'institution_verified', `Institution verified: ${account.name}`);
+    return c.json({ ok: true });
+  });
 
   // Audit log: what, when, which account id, and the id of the thing acted on. Never a name or an email.
   function audit(type: string, actor: string | null, institutionId: string | null, subject: string) {
@@ -130,6 +159,8 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     if (!body.success) return c.json(refuse('bad_request', 'Need a name, a valid email and a password of at least 8 characters'), 400);
     if (db.prepare('SELECT 1 FROM accounts WHERE email = ?').get(body.data.email)) return c.json(refuse('email_taken', 'An account with this email already exists'), 409);
     const account = await createAccount({ ...body.data, verified: false });
+    if (account.kind === 'institution') events.emit('warn', 'institution_unverified', `Institution signed up, not verified yet: ${account.name}`, deviceOf(c));
+    else events.emit('info', 'signup', 'New person account created', deviceOf(c));
     return c.json({ token: await tokenFor(account), account: publicAccount(account) }, 201);
   });
 
@@ -147,11 +178,15 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     }
     const account = db.prepare('SELECT * FROM accounts WHERE email = ?').get(body.data.email) as Account | undefined;
     if (!account || !passwordMatches(body.data.password, account.password_hash)) {
-      loginLimiter.recordFailure(key);
+      const locked = loginLimiter.recordFailure(key);
+      events.emit('warn', 'login_failed', 'Login failed (wrong email or password)', deviceOf(c));
+      if (locked) events.emit('error', 'login_lockout', 'Too many failed logins: this login is locked for 60 seconds', deviceOf(c));
       // Logged without the email or the password: only a hash of where it came from.
       audit('login.failed', null, null, `source:${sha256Hex(sourceOf(c)).slice(0, 16)}`);
       return c.json(refuse('wrong_login', 'Wrong email or password'), 401); // same message for both
     }
+    // An institution's name is public; a person's name is never written to the feed.
+    events.emit('info', 'login_ok', `Login ok (${account.kind === 'institution' ? account.name : 'person'})`, deviceOf(c));
     return c.json({ token: await tokenFor(account), account: publicAccount(account) });
   });
 
@@ -172,7 +207,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     const reason = account.kind === 'person' ? 'holder_deleted' : 'institution_deleted';
     const rows = db.prepare(`SELECT * FROM credentials WHERE ${column} = ?`).all(account.id) as Credential[];
     db.prepare(`UPDATE credentials SET status = 'cancelled' WHERE ${column} = ? AND status = 'pending'`).run(account.id);
-    await revokeCredentials(rows.filter((r) => r.status === 'active'), reason, account.id);
+    await revokeCredentials(rows.filter((r) => r.status === 'active'), reason, account.id, deviceOf(c));
 
     if (account.kind === 'institution') {
       for (const key of db.prepare("SELECT * FROM institution_keys WHERE institution_id = ? AND state = 'Active'").all(account.id) as InstitutionKey[]) {
@@ -183,6 +218,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     }
     db.prepare('DELETE FROM accounts WHERE id = ?').run(account.id);
     audit('account.deleted', account.id, account.kind === 'institution' ? account.id : null, account.id);
+    events.emit('warn', 'account_deleted', account.kind === 'institution' ? `Institution account deleted: ${account.name}` : 'Person account deleted', deviceOf(c));
     return c.json({ ok: true, revoked: rows.filter((r) => r.status === 'active').length });
   });
 
@@ -193,13 +229,14 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
   const statusList = () => db.prepare('SELECT bits_hex, version FROM status_list WHERE id = 1').get() as { bits_hex: string; version: number };
 
   // Mark these credentials revoked, flip their bits, bump the version, and publish the new fingerprint on the chain.
-  async function revokeCredentials(rows: Credential[], reason: string, actor: string): Promise<void> {
+  async function revokeCredentials(rows: Credential[], reason: string, actor: string, device: string | null = null): Promise<void> {
     if (rows.length === 0) return;
     let { bits_hex: bitsHex, version } = statusList();
     for (const row of rows) {
       db.prepare("UPDATE credentials SET status = 'revoked', revoked_reason = ?, revoked_at = ? WHERE id = ?").run(reason, isoNow(), row.id);
       if (row.status_list_index !== null) bitsHex = setBit(bitsHex, row.status_list_index);
       audit('credential.revoked', actor, row.institution_id, row.id);
+      events.emit('error', 'credential_revoked', `Credential ${row.id} revoked (${templateLabel(row.template)}, reason: ${reason})`, device);
     }
     version += 1;
     db.prepare('UPDATE status_list SET bits_hex = ?, version = ? WHERE id = 1').run(bitsHex, version);
@@ -247,6 +284,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     const person = db.prepare("SELECT * FROM accounts WHERE email = ? AND kind = 'person'").get(email.trim().toLowerCase()) as Account | undefined;
     // Logged without the email that was typed.
     audit(person ? 'lookup.found' : 'lookup.not_found', institution.id, institution.id, '-');
+    if (!person) events.emit('warn', 'lookup_not_found', `${institution.name}: no TRUE user with that email`, deviceOf(c));
     if (!person) return { response: c.json(refuse('no_such_user', 'No TRUE user with this email'), 404) };
     return { person };
   }
@@ -280,6 +318,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     db.prepare(`INSERT INTO credentials (id, institution_id, person_id, template, fields_json, status, claim_nonce, created_at)
                 VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`).run(id, institution.id, found.person.id, body.data.template, JSON.stringify(body.data.fields), randomToken(), isoNow());
     audit('credential.offered', institution.id, institution.id, id);
+    events.emit('info', 'offer_sent', `${institution.name} sent a ${templateLabel(body.data.template)} offer (${id})`, deviceOf(c));
     return c.json({ id }, 201);
   });
 
@@ -304,7 +343,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     const row = ownCredential(c);
     if (!row) return c.json(refuse('unknown_credential', 'No such credential'), 404);
     if (row.status !== 'active') return c.json(refuse('not_active', 'Only an active credential can be revoked'), 409);
-    await revokeCredentials([row], body.data.reason, c.get('account').id);
+    await revokeCredentials([row], body.data.reason, c.get('account').id, deviceOf(c));
     return c.json({ ok: true });
   });
 
@@ -315,6 +354,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     if (row.status !== 'pending') return c.json(refuse('not_pending', 'Only a pending offer can be cancelled'), 409);
     db.prepare("UPDATE credentials SET status = 'cancelled' WHERE id = ?").run(row.id);
     audit('offer.cancelled', c.get('account').id, row.institution_id, row.id);
+    events.emit('warn', 'offer_cancelled', `Offer ${row.id} cancelled by ${c.get('account').name}`, deviceOf(c));
     return c.json({ ok: true });
   });
 
@@ -349,6 +389,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
   app.post('/v1/me/offers/:id/accept', signedIn('person'), (c) => {
     const row = myOffer(c);
     if (!row) return c.json(refuse('unknown_offer', 'No such open offer'), 404);
+    events.emit('success', 'offer_accepted', `Offer ${row.id} accepted (${templateLabel(row.template)})`, deviceOf(c));
     return c.json({ nonce: row.claim_nonce, issuerId: row.institution_id });
   });
 
@@ -384,6 +425,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
       claims: JSON.parse(row.fields_json), // every field becomes its own selectively disclosable claim
     });
     audit('credential.accepted', c.get('account').id, row.institution_id, row.id);
+    events.emit('success', 'credential_claimed', `Credential ${row.id} claimed (${templateLabel(row.template)} from ${institution.name})`, deviceOf(c));
     return c.json({ credential, credentialId: row.id, issuerId: institution.id, issuerName: institution.name }, 201);
   });
 
@@ -392,6 +434,7 @@ export async function createCoreApp(db: DatabaseSync, chain?: CoreChain, options
     if (!row) return c.json(refuse('unknown_offer', 'No such open offer'), 404);
     db.prepare("UPDATE credentials SET status = 'declined' WHERE id = ?").run(row.id);
     audit('offer.declined', c.get('account').id, row.institution_id, row.id);
+    events.emit('warn', 'offer_declined', `Offer ${row.id} declined (${templateLabel(row.template)})`, deviceOf(c));
     return c.json({ ok: true });
   });
 

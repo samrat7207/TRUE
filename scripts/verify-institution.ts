@@ -18,5 +18,7 @@ if (!email || !existsSync(dbFile) || !existsSync(chainFile)) {
 const config: ChainConfig = JSON.parse(readFileSync(chainFile, 'utf8'));
 const asOwner = createRegistryWriter(config, config.owner);
 const id = await verifyInstitution(openCoreDb(dbFile), email, (institutionId) => asOwner.setIssuerVerified(institutionId, true));
+// Tell the running core API, so the Control Room's live feed shows it. If the API is not running, nothing is lost.
+if (id) await fetch('http://localhost:4001/ops/notify/institution-verified', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ institutionId: id }) }).catch(() => null);
 console.log(id ? `Verified ${email} (${id}). The app shows it within a few seconds.` : `No institution account has the email ${email}`);
 process.exit(id ? 0 : 1);

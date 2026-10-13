@@ -77,3 +77,5 @@ export function isAllowedOrigin(origin: string): boolean {
 
 // True when a network caller is this machine itself (used to keep admin routes off the Wi-Fi).
 export const isLoopback = (address: string) => address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+
+export { createEventLog, deviceLabel, eventQuery, opsRefusal, OPS_ORIGINS, type EventLevel, type EventLog, type EventPage, type LiveEvent } from './events.ts';

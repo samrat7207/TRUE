@@ -3,7 +3,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { getConnInfo } from '@hono/node-server/conninfo';
-import { CHAIN_RPC_URL, STATUS_LIST_ID } from '@true/shared';
+import { CHAIN_RPC_URL, STATUS_LIST_ID, deviceLabel } from '@true/shared';
+import { sha256Hex } from '@true/credentials';
 import { createRegistryReader, createRegistryWriter, type ChainConfig } from '@true/registry';
 import { openCoreDb } from './db.ts';
 import { createCoreApp, type CoreChain, type SeedAccount } from './app.ts';
@@ -55,7 +56,15 @@ const seedAccounts: SeedAccount[] = [
   { kind: 'person', name: 'Kabir Shaikh', email: 'kabir@demo.true', password: personPassword },
 ];
 
+// Salt for the short device labels in the live event feed. "npm run dev" writes a fresh one on every start,
+// and both services read the same file, so one phone gets the same label everywhere during a run.
+const SALT_FILE = new URL('../../../data/run-salt.txt', import.meta.url);
+if (!existsSync(SALT_FILE)) writeFileSync(SALT_FILE, crypto.randomUUID());
+const RUN_SALT = readFileSync(SALT_FILE, 'utf8');
+
 const { app, publishToChain, sessionPublicJwk } = await createCoreApp(db, chain, {
+  // Only this short salted hash and a coarse device class are kept: never the address or the full User-Agent.
+  getDevice: (c) => deviceLabel(getConnInfo(c).remote.address ?? 'unknown', c.req.header('user-agent') ?? '', (text) => sha256Hex(RUN_SALT + text)),
   seedAccounts,
   getSource: (c) => getConnInfo(c).remote.address ?? 'unknown', // the caller's IP address, for rate limiting
 });

@@ -409,3 +409,11 @@ Registers in the person app: pinned institution + credential type + fields, own 
 - Verifier links are built from the address the caller used, so a phone gets LAN addresses. Verifier instances listen on 127.0.0.1 only; `/proxy/*` (ops) answers only to the laptop.
 - CORS allows capacitor://localhost, localhost and private LAN addresses only.
 - QR scanning: @capacitor/barcode-scanner with ZXing, which is inside the APK: no Google Play Services download.
+
+## Control Room. Decisions
+- The Control Room is part of `apps/app`: shown only from localhost, in a window at least 1100px wide, outside a frame and outside the Android app. Phones, narrow windows and `?view=phone` get the phone app unchanged. No Android files touched, APK not rebuilt.
+- Live feed: each service keeps its last 1000 events in memory (`packages/shared/src/events.ts`). The front door collects its instances' events on each read of `/ops/events`; an instance killed between two reads loses its unread lines.
+- Device label = 3 hex of a salted hash of the caller's address + a coarse class (Android app / Android browser / laptop). The salt is `data/run-salt.txt`, rewritten by every `npm run dev`, shared by both services so one phone has one label.
+- `/ops/*`, `/proxy/*` and the load-test cleanup answer only to a loopback caller with no forwarded-for header and, if a page sent it, only to localhost:5176 / 127.0.0.1:5176. This makes the old Ops console (port 5175) unable to read server status; the Control Room replaces it.
+- Not built because the feature does not exist yet: "key rotated" and "key marked compromised" events (the core API has no such routes). A verification refused for a compromised key is logged with its reason code.
+- Over-ask: the server refuses it for registers (`beyond_register`, logged). For demo verifiers the server allows it on purpose and logs a warning; the refusal there happens in the wallet, which the servers cannot see.
